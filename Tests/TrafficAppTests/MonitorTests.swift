@@ -164,6 +164,19 @@ private actor FaultyRepository: HistoryRepository {
         XCTAssertEqual(model.speedTestPhase, .confirmMetered)
     }
 
+    func testRunningSpeedTestNeedsNewConsentWhenThePathBecomesMetered() async {
+        preferences.set(true, forKey: "probesDisabled")
+        let gate = SpeedTestGate()
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
+            preferences: preferences, speedTest: { try await gate.wait() })
+        model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")
+        model.requestSpeedTest()
+        guard case .running = model.speedTestPhase else { return XCTFail("The unmetered test should run") }
+        model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: true, interface: "en0")
+        XCTAssertEqual(model.speedTestPhase, .confirmMetered)
+        await gate.finish()
+    }
+
     func testConfirmedDowntimeSurvivesCounterFailureAndRebaseline() async throws {
         let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
         let model = model(inputs, repository: store, probe: ProbeSequence([.failed, .failed, .success]))
