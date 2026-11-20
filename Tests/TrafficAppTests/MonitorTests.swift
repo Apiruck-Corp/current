@@ -230,6 +230,27 @@ private actor FaultyRepository: HistoryRepository {
         XCTAssertTrue(saved)
     }
 
+    func testClockJumpKeepsConfirmedSecondsInTheCorrectedMinute() async throws {
+        for jump in [-3600.0, 3600.0] {
+            let inputs = TestInputs()
+            let store = try HistoryStore(url: directory.appendingPathComponent("clock-\(jump).sqlite"))
+            let model = model(inputs, repository: store, probe: ProbeSequence([.failed, .failed, .success]))
+            await model.start().value
+            await model.checkConnectivity()?.value
+            inputs.advance(8)
+            await model.checkConnectivity()?.value
+            inputs.advance(6)
+            inputs.setWallClock(by: jump)
+            await model.checkConnectivity()?.value
+            let saved = await model.flushAndWait()
+            XCTAssertTrue(saved)
+            let minutes = try await store.rows(grain: 60)
+            let corrected = Int64(floor(inputs.now().timeIntervalSince1970 / 60)) * 60
+            XCTAssertEqual(minutes.first { $0.start == corrected }?.summary.offline ?? 0, 6, accuracy: 0.0001)
+            XCTAssertEqual(minutes.reduce(0) { $0 + $1.summary.offline }, 6, accuracy: 0.0001)
+        }
+    }
+
     func testDailyHistoryUsesExactlyTheSelectedUTCDatesAtMidnightAndMidday() async throws {
         let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
         let midnight = Date(timeIntervalSince1970: floor(inputs.now().timeIntervalSince1970 / 86400) * 86400)
