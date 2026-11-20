@@ -257,8 +257,9 @@ import TrafficCore
         let panel = NSPopover()
         panel.behavior = .applicationDefined
         panel.animates = false
-        panel.contentViewController = NSHostingController(rootView: PopoverView(
-            model: model, showHistory: {}, showSettings: {}, quit: {}))
+        let content = PopoverView(model: model, showHistory: {}, showSettings: {}, quit: {})
+            .focusable().focusEffectDisabled().onExitCommand { [weak panel] in panel?.close() }
+        panel.contentViewController = EscapeHostingController(rootView: content) { [weak panel] in panel?.close() }
         panel.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
         defer { panel.close() }
         pump(); pump()
