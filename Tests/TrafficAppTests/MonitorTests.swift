@@ -343,45 +343,63 @@ private actor FaultyRepository: HistoryRepository {
         XCTAssertTrue(model.recentEvents.isEmpty)
     }
 
-    func testPathSwitchDuringFinalWritePreservesTheQuitCutoffOrResumesAccounting() async throws {
-        for veto in [false, true] {
-            let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("quit-\(veto).sqlite"))
-            let repository = FaultyRepository(store)
-            let model = model(inputs, repository: repository, probe: ProbeSequence([.failed, .failed]))
-            await model.start().value
-            await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")?.value
-            let firstSaved = await model.flushAndWait()
-            XCTAssertTrue(firstSaved)
-            inputs.advance(8)
-            await model.checkConnectivity()?.value
-            let saved = await model.flushAndWait()
-            XCTAssertTrue(saved)
-            let entered = TestGate(), release = TestGate()
-            await repository.holdNextWrite(entered: entered, release: release)
-            let quit = Task { await withCheckedContinuation { continuation in
-                model.prepareToQuit { continuation.resume(returning: $0) }
-            } }
-            await entered.wait()
-            inputs.advance(4, received: 400)
-            model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en1")
-            inputs.advance(3, received: 150)
-            await repository.inject(writes: veto)
-            await release.open()
-            let allowed = await quit.value
-            XCTAssertEqual(allowed, !veto)
-            if veto {
-                await repository.inject()
-                model.sample()
-                let retried = await model.flushAndWait()
-                XCTAssertTrue(retried)
-            }
-            let summary = try await store.aggregate(from: nil, to: inputs.now()).summary
-            XCTAssertEqual(summary.offline, veto ? 4 : 0)
-            XCTAssertEqual(summary.uncertain, veto ? 11 : 8)
-            XCTAssertEqual(summary.received, veto ? 550 : 0)
-            let events = try await store.events()
-            XCTAssertEqual(events.filter { $0.kind == "quit" }.count, veto ? 0 : 1)
+    private enum QuitBoundary: CaseIterable { case pathChange, sleep, pauseChecks }
+
+    func testSuccessfulAndVetoedQuitPreservePathSleepAndProbeBoundaries() async throws {
+        for boundary in QuitBoundary.allCases {
+            try await verifyQuit(at: boundary, veto: false)
+            try await verifyQuit(at: boundary, veto: true)
         }
+    }
+
+    private func verifyQuit(at boundary: QuitBoundary, veto: Bool) async throws {
+        preferences.removeObject(forKey: "probesDisabled")
+        let scenario = "\(boundary)-\(veto)"
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("quit-\(scenario).sqlite"))
+        let repository = FaultyRepository(store)
+        let model = model(inputs, repository: repository, probe: ProbeSequence([.failed, .failed]))
+        await model.start().value
+        await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")?.value
+        let firstSaved = await model.flushAndWait()
+        XCTAssertTrue(firstSaved)
+        inputs.advance(8)
+        await model.checkConnectivity()?.value
+        let saved = await model.flushAndWait()
+        XCTAssertTrue(saved)
+        let entered = TestGate(), release = TestGate()
+        await repository.holdNextWrite(entered: entered, release: release)
+        inputs.advance(2, received: 80)
+        let quit = Task { await withCheckedContinuation { continuation in
+            model.prepareToQuit { continuation.resume(returning: $0) }
+        } }
+        await entered.wait()
+        inputs.advance(4, received: 400)
+        switch boundary {
+        case .pathChange: model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en1")
+        case .sleep: model.willSleep()
+        case .pauseChecks: model.setProbes(false)
+        }
+        inputs.advance(3, received: 150)
+        await repository.inject(writes: veto)
+        await release.open()
+        let allowed = await quit.value
+        XCTAssertEqual(allowed, !veto, scenario)
+        if veto {
+            await repository.inject()
+            if boundary == .sleep { model.didWake() }
+            model.sample()
+            let retried = await model.flushAndWait()
+            XCTAssertTrue(retried, scenario)
+        }
+        let summary = try await store.aggregate(from: nil, to: inputs.now()).summary
+        let awakeAfterSwitch = veto && boundary != .sleep
+        XCTAssertEqual(summary.offline, veto ? 6 : 2, scenario)
+        XCTAssertEqual(summary.uncertain, awakeAfterSwitch ? 11 : 8, scenario)
+        XCTAssertEqual(summary.sleep, veto && boundary == .sleep ? 3 : 0, scenario)
+        let received: UInt64 = 80 + (veto ? 400 : 0) + (awakeAfterSwitch ? 150 : 0)
+        XCTAssertEqual(summary.received, received, scenario)
+        let events = try await store.events()
+        XCTAssertEqual(events.filter { $0.kind == "quit" }.count, veto ? 0 : 1, scenario)
     }
 
     func testFirstOpenQueuesTunnelIdentityBehindStartupInventory() async throws {
