@@ -30,7 +30,9 @@ import XCTest
         await checker.check().value
         XCTAssertEqual(checker.available, "0.1.5")
         XCTAssertEqual(checker.status, .checked)
-        checker.setAutomatic(true)
+        let nextDailyCheck = try XCTUnwrap(prefs.object(forKey: "nextReleaseCheck") as? Date)
+        XCTAssertEqual(nextDailyCheck.timeIntervalSinceNow, 86_400, accuracy: 5)
+        checker.automatic = true
         let restarted = ReleaseChecker(installed: "0.1.3", preferences: prefs) { throw URLError(.notConnectedToInternet) }
         restarted.scheduleAutomaticChecks()
         XCTAssertTrue(restarted.automatic)
@@ -41,8 +43,8 @@ import XCTest
         let retry = try XCTUnwrap(prefs.object(forKey: "nextReleaseCheck") as? Date)
         XCTAssertEqual(retry.timeIntervalSinceNow, 3600, accuracy: 5)
         XCTAssertEqual(restarted.available, "0.1.5")
-        restarted.setAutomatic(false)
-        checker.setAutomatic(false)
+        restarted.automatic = false
+        checker.automatic = false
         let upgraded = ReleaseChecker(installed: "0.1.5", preferences: prefs) { "0.1.5" }
         await upgraded.check().value
         XCTAssertNil(upgraded.available)

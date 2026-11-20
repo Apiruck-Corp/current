@@ -7,7 +7,12 @@ final class ReleaseChecker: ObservableObject {
     }
     @Published private(set) var status = Status.idle
     @Published private(set) var available: String?
-    @Published private(set) var automatic: Bool
+    @Published var automatic: Bool {
+        didSet {
+            preferences.set(automatic, forKey: "automaticReleaseChecks")
+            scheduleAutomaticChecks()
+        }
+    }
     let installed: String
     private let preferences: UserDefaults
     private let fetch: @Sendable () async throws -> String
@@ -98,12 +103,6 @@ final class ReleaseChecker: ObservableObject {
         return task
     }
 
-    func setAutomatic(_ enabled: Bool) {
-        automatic = enabled
-        preferences.set(enabled, forKey: "automaticReleaseChecks")
-        scheduleAutomaticChecks()
-    }
-
     func scheduleAutomaticChecks() {
         timer?.invalidate(); timer = nil
         guard automatic, pending == nil else { return }
@@ -143,7 +142,7 @@ struct UpdateSettings: View {
             if checker.status == .failed {
                 Text("Couldn’t check GitHub for updates. Try again later.").font(.callout)
             }
-            Toggle("Automatically check for updates", isOn: Binding(get: { checker.automatic }, set: checker.setAutomatic))
+            Toggle("Automatically check for updates", isOn: $checker.automatic)
         } footer: {
             Text("Automatic checks contact GitHub once a day. Available updates appear in the panel. You choose when to download and install them.")
                 .font(.caption).foregroundStyle(.secondary)
