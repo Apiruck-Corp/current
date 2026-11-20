@@ -9,3 +9,4 @@ Last updated: 2026-11-20
 ## Later
 
 ## Done
+- 2026-11-20: Updated the website and GitHub project page with the 0.1.4 source changes and links to the latest published installer.

@@ -12,9 +12,9 @@ Current shows download and upload rates together, with a separate internet-healt
 
 ## Download
 
-[Download Current for macOS](https://github.com/pocarles/current/releases/latest/download/Current.dmg). Open the DMG and drag Current to Applications.
+[Download Current for macOS](https://github.com/Apiruck-Corp/current/releases/latest/download/Current.dmg). Open the DMG and drag Current to Applications.
 
-The installer is Developer ID signed, Apple notarized and stapled. Requires macOS 14 or later and contains Apple Silicon and Intel binaries. Runtime verification has been performed on Apple Silicon; Intel hardware has not yet been tested. Updates are installed manually from [GitHub Releases](https://github.com/pocarles/current/releases). Current does not install itself at login.
+The installer is Developer ID signed, Apple notarized and stapled. Requires macOS 14 or later and contains Apple Silicon and Intel binaries. Runtime verification has been performed on Apple Silicon; Intel hardware has not yet been tested. Updates are installed manually from [GitHub Releases](https://github.com/Apiruck-Corp/current/releases). Current does not install itself at login.
 
 ## Features
 
@@ -60,12 +60,18 @@ Writes are batched about once a minute, with additional saves around lifecycle a
 
 See [history and accuracy](docs/history.md) for retention, schema migrations, gaps, estimates and backup restoration. CSV uses UTC days. Backup includes retained resolutions and pending committed WAL data. Restoration is a manual file workflow after quitting Current.
 
+## What changed in the 0.1.4 source
+
+If a speed test is running when your Mac switches to a metered hotspot, Current stops it and asks before starting again. It also checks the new network before reporting that you’re back online. Outage history keeps the time you spent awake and offline even if the clock changes or a traffic reading is missed. The 7-day history filter now shows exactly seven UTC dates, including today, and the live graph redraws faster.
+
+[See Current in action](https://pocarles.com/current/) · [Check the latest published release](https://github.com/Apiruck-Corp/current/releases/latest)
+
 ## Build
 
 Use Xcode's Swift toolchain. There are no third-party package dependencies.
 
 ```sh
-git clone https://github.com/pocarles/current.git
+git clone https://github.com/Apiruck-Corp/current.git
 cd current
 ./scripts/swift.sh test
 ./scripts/build-app.sh
