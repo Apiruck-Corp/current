@@ -135,7 +135,9 @@ struct SettingsPane: View {
     // Outside the app bundle (tests, `swift run`) the main bundle belongs to another program.
     static var version: String {
         guard Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Current",
-              let release = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else { return "0.1.3" }
+              let release = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else {
+            return "0.1.4"
+        }
         return release
     }
     @ViewBuilder private var about: some View {
