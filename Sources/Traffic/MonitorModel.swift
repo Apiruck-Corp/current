@@ -569,6 +569,7 @@ final class MonitorModel: ObservableObject {
         flush(); onStatusChange?()
     }
     func didWake() {
+        if automatic { updates.scheduleAutomaticChecks() }
         let now = nowProvider()
         if let start = sleepStart { append(Observation(start: start, end: now, coverage: .sleep)) }
         let uptime = uptimeProvider()

@@ -52,6 +52,8 @@ Internet checks contact `https://www.gstatic.com/generate_204`, with `https://cp
 
 Healthy checks normally run every 30 seconds, or every 120 seconds in Low Power Mode. Two failed rounds at least five seconds apart confirm an outage. Unexpected pages remain uncertain. A successful endpoint check does not guarantee every site is reachable. Checks can be paused without stopping passive traffic measurement. There are no continuous speed tests or network scans.
 
+Manual and optional daily update checks contact GitHub’s public releases API. GitHub sees your public IP and the app’s user agent. Automatic checks are off by default.
+
 The speed test runs only when you ask. It uses macOS's built-in `networkQuality` tool, which contacts Apple's servers and moves data at full speed for about 12 seconds. Faster connections use more data, often several hundred MB. On a connection macOS marks as metered, such as a phone hotspot, Current asks before starting. If your Mac switches to a metered connection during a test, Current stops the test and asks before starting another. The result is stored in preferences and logged as a history event. The test's own traffic also appears in measured totals.
 
 ## History and backups

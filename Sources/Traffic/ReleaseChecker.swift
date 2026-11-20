@@ -14,6 +14,7 @@ final class ReleaseChecker: ObservableObject {
     private var pending: Task<Void, Never>?
     private var timer: Timer?
     private static let interval: TimeInterval = 86_400
+    private static let retryInterval: TimeInterval = 3600
 
     init(installed: String, preferences: UserDefaults,
          fetch: @escaping @Sendable () async throws -> String = ReleaseChecker.fetchLatest) {
@@ -79,7 +80,7 @@ final class ReleaseChecker: ObservableObject {
     func check() -> Task<Void, Never> {
         if let pending { return pending }
         status = .checking
-        preferences.set(Date(), forKey: "lastReleaseCheckAttempt")
+        preferences.set(Date().addingTimeInterval(Self.retryInterval), forKey: "nextReleaseCheck")
         let task = Task {
             do {
                 let version = try await fetch()
@@ -88,6 +89,8 @@ final class ReleaseChecker: ObservableObject {
                 available = Self.isNewer(version, than: installed) ? version : nil
                 status = .checked
             } catch { status = .failed }
+            let interval = status == .failed ? Self.retryInterval : Self.interval
+            preferences.set(Date().addingTimeInterval(interval), forKey: "nextReleaseCheck")
             pending = nil
             scheduleAutomaticChecks()
         }
@@ -104,8 +107,8 @@ final class ReleaseChecker: ObservableObject {
     func scheduleAutomaticChecks() {
         timer?.invalidate(); timer = nil
         guard automatic, pending == nil else { return }
-        let last = preferences.object(forKey: "lastReleaseCheckAttempt") as? Date
-        let delay = min(Self.interval, last?.addingTimeInterval(Self.interval).timeIntervalSinceNow ?? 0)
+        let nextDate = preferences.object(forKey: "nextReleaseCheck") as? Date
+        let delay = min(Self.interval, nextDate?.timeIntervalSinceNow ?? 0)
         if delay <= 0 { check(); return }
         let next = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor in
