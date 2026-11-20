@@ -127,12 +127,12 @@ private actor FaultyRepository: HistoryRepository {
             preferences: preferences, counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() },
             probe: { await entered.open(); await release.wait(); return .success })
         await model.start().value
-        let oldCheck = model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")
+        let oldCheck = try XCTUnwrap(model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0"))
         await entered.wait()
         inputs.advance(6)
         let disconnected = model.updatePath(satisfied: false, changed: true, isMetered: false, interface: nil)
         await release.open()
-        await oldCheck?.value
+        await oldCheck.value
         await disconnected?.value
         XCTAssertEqual(model.health, .uncertain)
         XCTAssertNil(model.connectedDuration)
@@ -350,6 +350,8 @@ private actor FaultyRepository: HistoryRepository {
             let model = model(inputs, repository: repository, probe: ProbeSequence([.failed, .failed]))
             await model.start().value
             await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")?.value
+            let firstSaved = await model.flushAndWait()
+            XCTAssertTrue(firstSaved)
             inputs.advance(8)
             await model.checkConnectivity()?.value
             let saved = await model.flushAndWait()

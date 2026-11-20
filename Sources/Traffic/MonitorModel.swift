@@ -101,7 +101,10 @@ final class MonitorModel: ObservableObject {
     private var historyGeneration = 0
     private var lastAccounted: Date
     private var lastAccountedUptime: TimeInterval
-    private var terminationRequested = false
+    // A successful quit ends history at the request. Keep any intervening path or
+    // sleep boundary in memory until we know whether monitoring has to resume.
+    private var observationsDuringQuit: [Observation]?
+    private var terminationRequested: Bool { observationsDuringQuit != nil }
     let dataURL: URL
     private let preferences: UserDefaults
     private let automatic: Bool
@@ -214,7 +217,7 @@ final class MonitorModel: ObservableObject {
     @discardableResult
     func updatePath(satisfied: Bool, changed: Bool, isMetered: Bool, interface: String?) -> Task<Void, Never>? {
         if changed, probesEnabled, !isSleeping {
-            sample()
+            if !terminationRequested || health != .checking { takeSample() }
             cancelProbe()
             machine.recheckPath()
             health = machine.state; lastChecked = nil
@@ -224,6 +227,8 @@ final class MonitorModel: ObservableObject {
         if isMetered, changed || pathIsMetered != true, case .running = speedTestPhase {
             stopSpeedTest()
             speedTestPhase = .confirmMetered
+        } else if !isMetered, speedTestPhase == .confirmMetered {
+            speedTestPhase = .idle
         }
         pathSatisfied = satisfied
         pathIsMetered = isMetered
@@ -234,7 +239,7 @@ final class MonitorModel: ObservableObject {
     }
     private func scheduleSampler() {
         sampler?.invalidate(); sampler = nil
-        guard started, automatic, !isSleeping else { return }
+        guard started, automatic, !isSleeping, !terminationRequested else { return }
         let interval: Double = lowPower && !popoverOpen ? 5 : 1
         sampler = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.sample() }
@@ -243,7 +248,11 @@ final class MonitorModel: ObservableObject {
         RunLoop.main.add(sampler!, forMode: .common)
     }
     func sample() {
-        guard !isSleeping, !terminationRequested else { return }
+        guard !terminationRequested else { return }
+        takeSample()
+    }
+    private func takeSample() {
+        guard !isSleeping else { return }
         let date = nowProvider(), uptime = uptimeProvider()
         let elapsed = max(0, uptime - lastAccountedUptime)
         let wall = date.timeIntervalSince(lastAccounted)
@@ -283,11 +292,15 @@ final class MonitorModel: ObservableObject {
         if popoverOpen { rebuildConnectionDetails() }
         connectionStreak.advance(uptime: uptime, observed: observed && health == .online, freshness: checkFreshness)
         connectedDuration = connectionStreak.duration
-        if uptime - lastFlush >= 60 { flush() }
+        if uptime - lastFlush >= 60, !terminationRequested { flush() }
         onStatusChange?()
     }
     private func append(_ observation: Observation) {
         guard observation.duration > 0 else { return }
+        if terminationRequested {
+            observationsDuringQuit?.append(observation)
+            return
+        }
         persistence.append(observation)
         liveGraph.append(observation)
         if let first = liveGraph.points.first {
@@ -669,15 +682,19 @@ final class MonitorModel: ObservableObject {
         stopSpeedTest()
         // History never opened, so nothing can be saved. Refusing would make Current impossible to quit.
         guard store != nil else { pathMonitor.cancel(); completion(true); return }
-        sample(); terminationRequested = true; sampler?.invalidate(); cancelProbe()
+        sample(); observationsDuringQuit = []; sampler?.invalidate(); cancelProbe()
         onStatusChange?()
         persistence.event(at: nowProvider(), kind: "quit", detail: "App quit. Future time is unobserved until the next launch.")
         flush { [weak self] saved in
             guard let self else { completion(false); return }
-            if saved { self.pathMonitor.cancel() }
-            else {
+            if saved {
+                self.observationsDuringQuit = []
+                self.pathMonitor.cancel()
+            } else {
                 self.persistence.removePendingEvents(kind: "quit")
-                self.terminationRequested = false
+                let resumed = self.observationsDuringQuit ?? []
+                self.observationsDuringQuit = nil
+                for observation in resumed { self.append(observation) }
                 self.errorMessage = "Current is still running because history could not be saved. Retry quitting after resolving the storage error."
                 self.scheduleSampler(); self.scheduleProbe(after: 0)
             }
