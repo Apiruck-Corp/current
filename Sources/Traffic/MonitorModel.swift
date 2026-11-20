@@ -184,17 +184,11 @@ final class MonitorModel: ObservableObject {
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
-            let metered = path.isExpensive || path.isConstrained ? path.availableInterfaces.first?.name : nil
+            let isMetered = path.isExpensive || path.isConstrained
+            let interface = path.availableInterfaces.first?.name
             let signature = String(describing: path.status) + path.availableInterfaces.map { "\($0.name)#\($0.index)" }.sorted().joined(separator: "|")
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                if self.pathSignature != nil && self.pathSignature != signature { self.invalidateConnectionInterval() }
-                self.pathSignature = signature
-                self.pathSatisfied = satisfied
-                self.meteringKnown = true
-                if self.meteredInterface != metered { self.meteredInterface = metered; self.rebuildConnectionDetails() }
-                if self.popoverOpen { Task { await self.refreshConnectionInventory(includeTailscale: true, force: true) } }
-                self.checkConnectivity()
+                self?.updatePath(satisfied: satisfied, signature: signature, isMetered: isMetered, interface: interface)
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "Traffic.path", qos: .utility))
@@ -214,6 +208,17 @@ final class MonitorModel: ObservableObject {
         })
         if !probesEnabled { machine.reset(to: .disabled); health = .disabled }
         checkConnectivity()
+    }
+    @discardableResult
+    func updatePath(satisfied: Bool, signature: String, isMetered: Bool, interface: String?) -> Task<Void, Never>? {
+        if pathSignature != nil && pathSignature != signature { invalidateConnectionInterval() }
+        pathSignature = signature
+        pathSatisfied = satisfied
+        meteringKnown = true
+        let metered = isMetered ? interface : nil
+        if meteredInterface != metered { meteredInterface = metered; rebuildConnectionDetails() }
+        if popoverOpen { Task { await refreshConnectionInventory(includeTailscale: true, force: true) } }
+        return checkConnectivity()
     }
     private func scheduleSampler() {
         sampler?.invalidate(); sampler = nil
