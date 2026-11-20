@@ -245,9 +245,12 @@ final class MonitorModel: ObservableObject {
     func sample() {
         guard !isSleeping, !terminationRequested else { return }
         let date = nowProvider(), uptime = uptimeProvider()
+        let elapsed = max(0, uptime - lastAccountedUptime)
+        let wall = date.timeIntervalSince(lastAccounted)
+        let clockChanged = wall < 0 || abs(wall - elapsed) >= CounterEngine.clockTolerance
         // A probe can close a sample at the same timestamp as the timer.
         // Duplicate instants add no data and must not break a valid interval.
-        guard date != lastAccounted else { return }
+        guard wall != 0 || clockChanged else { return }
         var observation = Observation(start: lastAccounted, end: date, coverage: .unobserved)
         do {
             let counters = try counterProvider()
@@ -258,9 +261,17 @@ final class MonitorModel: ObservableObject {
         } catch {
             engine = CounterEngine(); detailEngine = InterfaceRateEngine(); lastCounters = []; lastRates = []
         }
-        // Reachability comes from the probes, even when counters fail. Wall-clock jumps
-        // can create missing history but cannot lengthen the monitored outage.
-        let awakeSeconds = max(0, min(observation.duration, uptime - lastAccountedUptime))
+        if clockChanged, elapsed > 0, observation.coverage == .unobserved {
+            // Anchor the awake interval to the corrected clock. Any skipped dates have
+            // no readings or health evidence of their own.
+            let correctedStart = date.addingTimeInterval(-elapsed)
+            if correctedStart > lastAccounted {
+                append(Observation(start: lastAccounted, end: correctedStart, coverage: .unobserved))
+            }
+            observation.start = correctedStart
+        }
+        // Reachability comes from the probes, even when traffic counters fail.
+        let awakeSeconds = min(observation.duration, elapsed)
         if health == .offline { observation.offlineSeconds = awakeSeconds }
         if health == .uncertain || health == .checking || health == .disabled { observation.uncertainSeconds = awakeSeconds }
         lastAccounted = date; lastAccountedUptime = uptime

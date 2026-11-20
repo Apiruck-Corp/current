@@ -81,6 +81,7 @@ extension Array where Element == InterfaceCounter {
 }
 
 public struct CounterEngine: Sendable {
+    public static let clockTolerance: TimeInterval = 2
     private var baseline: [String: InterfaceCounter] = [:]
     private var lastDate: Date?
     private var lastUptime: Double?
@@ -99,7 +100,7 @@ public struct CounterEngine: Sendable {
         let wallElapsed = date.timeIntervalSince(previousDate)
         defer { rebaseline(counters, at: date, uptime: uptime) }
         // Delayed timers and wall-clock changes must not become huge rates or pretend to be zero.
-        guard elapsed > 0, elapsed <= 15, wallElapsed > 0, abs(wallElapsed - elapsed) < 2 else {
+        guard elapsed > 0, elapsed <= 15, wallElapsed > 0, abs(wallElapsed - elapsed) < Self.clockTolerance else {
             return Observation(start: min(previousDate, date), end: date, coverage: .unobserved)
         }
         var received: UInt64 = 0, sent: UInt64 = 0

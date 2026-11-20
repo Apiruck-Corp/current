@@ -100,7 +100,7 @@ public struct InterfaceRateEngine: Sendable {
         defer { rebaseline(counters, at: date, uptime: uptime) }
         guard let lastDate, let lastUptime else { return active.map { InterfaceRate(name: $0.name) } }
         let elapsed = uptime - lastUptime, wall = date.timeIntervalSince(lastDate)
-        let valid = elapsed > 0 && elapsed <= 15 && wall > 0 && abs(wall - elapsed) < 2
+        let valid = elapsed > 0 && elapsed <= 15 && wall > 0 && abs(wall - elapsed) < CounterEngine.clockTolerance
         return active.map { counter in
             guard valid, let previous = baseline[counter.name], previous.index == counter.index,
                   counter.received >= previous.received, counter.sent >= previous.sent else {

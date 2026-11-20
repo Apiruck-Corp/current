@@ -166,15 +166,23 @@ private actor FaultyRepository: HistoryRepository {
 
     func testRunningSpeedTestNeedsNewConsentWhenThePathBecomesMetered() async {
         preferences.set(true, forKey: "probesDisabled")
-        let gate = SpeedTestGate()
+        let gate = SpeedTestGate(), finished = TestGate()
         let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
-            preferences: preferences, speedTest: { try await gate.wait() })
+            preferences: preferences, speedTest: {
+                let result = try await gate.wait()
+                await finished.open()
+                return result
+            })
         model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")
         model.requestSpeedTest()
         guard case .running = model.speedTestPhase else { return XCTFail("The unmetered test should run") }
         model.updatePath(satisfied: true, changed: false, isMetered: true, interface: "en0")
         XCTAssertEqual(model.speedTestPhase, .confirmMetered)
         await gate.finish()
+        await finished.wait()
+        let cancelled = await gate.sawCancellation
+        XCTAssertTrue(cancelled)
+        XCTAssertNil(model.lastSpeedTest)
     }
 
     func testConfirmedDowntimeSurvivesCounterFailureAndRebaseline() async throws {
