@@ -2,6 +2,7 @@
 Last updated: 2026-11-20
 
 ## Now
+- 2026-11-20: Fix menu-bar readability and add update checks.
 
 ## Next
 
