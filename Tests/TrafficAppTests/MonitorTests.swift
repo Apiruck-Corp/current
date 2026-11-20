@@ -30,6 +30,18 @@ private actor ProbeSequence {
     init(_ outcomes: [ProbeOutcome]) { self.outcomes = outcomes }
     func next() -> ProbeOutcome { outcomes.isEmpty ? .success : outcomes.removeFirst() }
 }
+private actor TestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if !isOpen { await withCheckedContinuation { waiters.append($0) } }
+    }
+    func open() {
+        isOpen = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+}
 private actor InventoryGate {
     var calls: [Bool] = []
     var pending: CheckedContinuation<Void, Never>?
@@ -53,9 +65,11 @@ private actor FaultyRepository: HistoryRepository {
     let underlying: HistoryStore
     var failReads = false, failWrites = false
     var delayAggregate = false
+    var nextRowsGates: (entered: TestGate, release: TestGate)?
     init(_ store: HistoryStore) { underlying = store }
     func inject(reads: Bool = false, writes: Bool = false) { failReads = reads; failWrites = writes }
     func delayNextAggregate() { delayAggregate = true }
+    func holdNextRows(entered: TestGate, release: TestGate) { nextRowsGates = (entered, release) }
     func lastRecorded() async throws -> Date? { try await underlying.lastRecorded() }
     func record(_ observations: [Observation], now: Date, events: [RecordedEvent], connectivity: ConnectivityUpdate) async throws {
         if failWrites { throw HistoryError("mock disk failure") }
@@ -75,7 +89,14 @@ private actor FaultyRepository: HistoryRepository {
         if delay { try await Task.sleep(for: .milliseconds(100)) }
         return result
     }
-    func rows(grain: Int, since: Date, limit: Int) async throws -> [HistoryRow] { try await underlying.rows(grain: grain, since: since, limit: limit) }
+    func rows(grain: Int, since: Date, limit: Int) async throws -> [HistoryRow] {
+        if let gates = nextRowsGates {
+            nextRowsGates = nil
+            await gates.entered.open()
+            await gates.release.wait()
+        }
+        return try await underlying.rows(grain: grain, since: since, limit: limit)
+    }
     func events(limit: Int) async throws -> [HistoryEvent] { try await underlying.events(limit: limit) }
     func backup(to destination: URL) async throws { try await underlying.backup(to: destination) }
     func exportCSV(to destination: URL) async throws { try await underlying.exportCSV(to: destination) }
@@ -93,6 +114,145 @@ private actor FaultyRepository: HistoryRepository {
         MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), repository: repository, automatic: false, preferences: preferences,
                      counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() }, probe: { await probe.next() }, inventory: { _ in ConnectionInventory(physicalKinds: ["en0": .wifi]) })
     }
+    func testOldPathSuccessCannotMarkADisconnectedMacOnline() async throws {
+        let inputs = TestInputs(), entered = TestGate(), release = TestGate()
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
+            preferences: preferences, counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() },
+            probe: { await entered.open(); await release.wait(); return .success })
+        await model.start().value
+        let oldCheck = model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")
+        await entered.wait()
+        inputs.advance(6)
+        let disconnected = model.updatePath(satisfied: false, signature: "disconnected", isMetered: false, interface: nil)
+        await release.open()
+        await oldCheck?.value
+        await disconnected?.value
+        XCTAssertEqual(model.health, .uncertain)
+        XCTAssertNil(model.connectedDuration)
+        inputs.advance(8)
+        await model.checkConnectivity()?.value
+        XCTAssertEqual(model.health, .offline)
+    }
+
+    func testSwitchingPathsNeedsFreshFailureConfirmationAndPreservesRecovery() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        let model = model(inputs, repository: store, probe: ProbeSequence([.failed, .failed, .failed, .success]))
+        await model.start().value
+        await model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")?.value
+        inputs.advance(8)
+        await model.updatePath(satisfied: true, signature: "Ethernet", isMetered: false, interface: "en1")?.value
+        XCTAssertEqual(model.health, .uncertain)
+        inputs.advance(8)
+        await model.checkConnectivity()?.value
+        XCTAssertEqual(model.health, .offline)
+        inputs.advance(8)
+        await model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")?.value
+        XCTAssertEqual(model.health, .online)
+        let saved = await model.flushAndWait()
+        XCTAssertTrue(saved)
+        let events = try await store.events()
+        XCTAssertEqual(events.filter { $0.kind == "recovery" }.count, 1)
+        XCTAssertEqual(model.today.offline, 8)
+    }
+
+    func testMeteredPathWithoutInterfaceNameStillRequiresConfirmation() {
+        preferences.set(true, forKey: "probesDisabled")
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
+            preferences: preferences, speedTest: { throw HistoryError("Synthetic speed test") })
+        model.updatePath(satisfied: true, signature: "metered", isMetered: true, interface: nil)
+        model.requestSpeedTest()
+        XCTAssertEqual(model.speedTestPhase, .confirmMetered)
+    }
+
+    func testConfirmedDowntimeSurvivesCounterFailureAndRebaseline() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        let model = model(inputs, repository: store, probe: ProbeSequence([.failed, .failed, .success]))
+        await model.start().value
+        await model.checkConnectivity()?.value
+        inputs.advance(8)
+        await model.checkConnectivity()?.value
+        inputs.setBroken(true)
+        inputs.advance(3, received: 100); model.sample()
+        inputs.setBroken(false)
+        inputs.advance(2, received: 200); model.sample()
+        inputs.advance(1, received: 50)
+        await model.checkConnectivity()?.value
+        let saved = await model.flushAndWait()
+        XCTAssertTrue(saved)
+        let history = try await store.aggregate(from: nil, to: inputs.now()).summary
+        XCTAssertEqual(history.offline, 6)
+        XCTAssertEqual(history.unobserved, 5)
+        XCTAssertEqual(history.received, 50)
+    }
+
+    func testAdjustingWallClockDoesNotInventDowntimeOrRecoveryDuration() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        let model = model(inputs, repository: store, probe: ProbeSequence([.failed, .failed, .success]))
+        await model.start().value
+        await model.checkConnectivity()?.value
+        inputs.advance(8)
+        await model.checkConnectivity()?.value
+        inputs.setWallClock(by: 3600)
+        inputs.advance(6)
+        await model.checkConnectivity()?.value
+        let saved = await model.flushAndWait()
+        XCTAssertTrue(saved)
+        let history = try await store.aggregate(from: nil, to: inputs.now())
+        XCTAssertEqual(history.summary.offline, 6, accuracy: 0.0001)
+        let events = try await store.events()
+        XCTAssertTrue(events.contains { $0.kind == "recovery" && $0.detail.contains("6 seconds after") })
+    }
+
+    func testClockCorrectionBetweenSpacedFailuresStillConfirmsOutage() async {
+        let inputs = TestInputs(), model = model(inputs, probe: ProbeSequence([.failed, .failed, .success]))
+        await model.start().value
+        await model.checkConnectivity()?.value
+        inputs.advance(8)
+        inputs.setWallClock(by: -3600)
+        await model.checkConnectivity()?.value
+        XCTAssertEqual(model.health, .offline)
+        inputs.advance(6)
+        await model.checkConnectivity()?.value
+        let saved = await model.flushAndWait()
+        XCTAssertTrue(saved)
+    }
+
+    func testDailyHistoryUsesExactlyTheSelectedUTCDatesAtMidnightAndMidday() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        let midnight = Date(timeIntervalSince1970: floor(inputs.now().timeIntervalSince1970 / 86400) * 86400)
+        inputs.setWallClock(by: midnight.timeIntervalSince(inputs.now()))
+        for offset in -7...2 {
+            let day = midnight.addingTimeInterval(Double(offset) * 86400)
+            try await store.record([Observation(start: day, end: day.addingTimeInterval(1), received: 1)], now: day)
+        }
+        let model = model(inputs, repository: store)
+        let expected = (0..<7).map { Int64(midnight.timeIntervalSince1970) - Int64($0 * 86400) }
+        await model.loadHistory(days: 7)
+        XCTAssertEqual(model.historyRows.map(\.start), expected)
+        inputs.advance(12 * 3600)
+        await model.loadHistory(days: 7)
+        XCTAssertEqual(model.historyRows.map(\.start), expected)
+        await model.loadHistory(days: 0)
+        XCTAssertEqual(model.historyRows.count, 10)
+    }
+
+    func testLateHistoryReadCannotOverwriteTheSelectedFilter() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        for daysAgo in [1, 12] {
+            let day = inputs.now().addingTimeInterval(-Double(daysAgo) * 86400)
+            try await store.record([Observation(start: day, end: day.addingTimeInterval(1))], now: inputs.now())
+        }
+        let repository = FaultyRepository(store), model = model(inputs, repository: repository)
+        let entered = TestGate(), release = TestGate()
+        await repository.holdNextRows(entered: entered, release: release)
+        let previous = Task { await model.loadHistory(days: 30) }
+        await entered.wait()
+        await model.loadHistory(days: 7)
+        await release.open()
+        await previous.value
+        XCTAssertEqual(model.historyRows.count, 1)
+    }
+
     func testFirstOpenQueuesTunnelIdentityBehindStartupInventory() async throws {
         let gate = InventoryGate(), inputs = TestInputs()
         let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
