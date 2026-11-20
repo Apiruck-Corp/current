@@ -207,12 +207,13 @@ public actor HistoryStore: HistoryRepository {
         sqlite3_bind_text(statement, 3, String(detail.prefix(512)), -1, transient)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw db.error() }
     }
-    public func rows(grain: Int = 86400, since: Date = .distantPast, limit: Int = 366) throws -> [HistoryRow] {
+    public func rows(grain: Int = 86400, since: Date = .distantPast, before: Date = .distantFuture, limit: Int = 366) throws -> [HistoryRow] {
         guard [60, 3600, 86400].contains(grain) else { throw HistoryError("Unknown history interval") }
-        let statement = try db.prepare("SELECT start,received,sent,peak_down,peak_up,observed,sleep,unobserved,offline,uncertain,app_gap FROM buckets WHERE grain=? AND start>=? ORDER BY start DESC LIMIT ?")
+        let statement = try db.prepare("SELECT start,received,sent,peak_down,peak_up,observed,sleep,unobserved,offline,uncertain,app_gap FROM buckets WHERE grain=? AND start>=? AND start<? ORDER BY start DESC LIMIT ?")
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_int(statement, 1, Int32(grain)); sqlite3_bind_int64(statement, 2, Int64(since.timeIntervalSince1970))
-        sqlite3_bind_int(statement, 3, Int32(min(40000, max(1, limit))))
+        sqlite3_bind_int(statement, 1, Int32(grain)); sqlite3_bind_double(statement, 2, since.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 3, before.timeIntervalSince1970)
+        sqlite3_bind_int(statement, 4, Int32(min(40000, max(1, limit))))
         var result: [HistoryRow] = []
         while true {
             let step = sqlite3_step(statement)

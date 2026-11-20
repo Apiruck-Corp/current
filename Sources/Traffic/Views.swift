@@ -40,9 +40,9 @@ struct RateGraph: View {
     var markers: [GraphMarker] = []
     var height: CGFloat = 112
     private var observations: [GraphPoint] { chart.points }
-    private var measuredPeak: Double { observations.filter(\.hasMeasurements).map { max($0.peakDown, $0.peakUp) }.max() ?? 0 }
-    private var maximum: Double { GraphScale.upperBound(measuredPeak) }
     var body: some View {
+        let measuredPeak = chart.peak
+        let maximum = GraphScale.upperBound(measuredPeak)
         Canvas { context, size in
             let start = chart.start
             let span = max(1, chart.end.timeIntervalSince(start))
@@ -492,7 +492,7 @@ struct SpeedTestCard: View {
     }
     private var confirm: some View {
         VStack(alignment: .leading, spacing: 8) {
-            title(model.meteredInterface != nil ? "You're on a hotspot" : "Connection type not confirmed yet", symbol: "personalhotspot")
+            title(model.pathIsMetered == true ? "You're on a metered connection" : "Connection type not confirmed yet", symbol: "personalhotspot")
             Text(model.speedTestDataNote)
                 .font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
@@ -524,7 +524,7 @@ struct SpeedTestCard: View {
                 Spacer()
                 Button(model.lastSpeedTest == nil ? "Run test" : "Run again") { model.requestSpeedTest() }
                     .buttonStyle(QuietButtonStyle())
-                    .help(model.meteredInterface != nil ? "You're on a hotspot. Current asks before using data." : "Measures download, upload and responsiveness with Apple's servers. Data use grows with connection speed.")
+                    .help(model.pathIsMetered == true ? "Current asks before using data on a metered connection." : "Measures download, upload and responsiveness with Apple's servers. Data use grows with connection speed.")
             }
             if let result = model.lastSpeedTest {
                 HStack(alignment: .firstTextBaseline, spacing: 18) {

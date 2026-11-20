@@ -89,13 +89,13 @@ private actor FaultyRepository: HistoryRepository {
         if delay { try await Task.sleep(for: .milliseconds(100)) }
         return result
     }
-    func rows(grain: Int, since: Date, limit: Int) async throws -> [HistoryRow] {
+    func rows(grain: Int, since: Date, before: Date, limit: Int) async throws -> [HistoryRow] {
         if let gates = nextRowsGates {
             nextRowsGates = nil
             await gates.entered.open()
             await gates.release.wait()
         }
-        return try await underlying.rows(grain: grain, since: since, limit: limit)
+        return try await underlying.rows(grain: grain, since: since, before: before, limit: limit)
     }
     func events(limit: Int) async throws -> [HistoryEvent] { try await underlying.events(limit: limit) }
     func backup(to destination: URL) async throws { try await underlying.backup(to: destination) }
@@ -120,10 +120,10 @@ private actor FaultyRepository: HistoryRepository {
             preferences: preferences, counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() },
             probe: { await entered.open(); await release.wait(); return .success })
         await model.start().value
-        let oldCheck = model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")
+        let oldCheck = model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")
         await entered.wait()
         inputs.advance(6)
-        let disconnected = model.updatePath(satisfied: false, signature: "disconnected", isMetered: false, interface: nil)
+        let disconnected = model.updatePath(satisfied: false, changed: true, isMetered: false, interface: nil)
         await release.open()
         await oldCheck?.value
         await disconnected?.value
@@ -138,15 +138,15 @@ private actor FaultyRepository: HistoryRepository {
         let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
         let model = model(inputs, repository: store, probe: ProbeSequence([.failed, .failed, .failed, .success]))
         await model.start().value
-        await model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")?.value
+        await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")?.value
         inputs.advance(8)
-        await model.updatePath(satisfied: true, signature: "Ethernet", isMetered: false, interface: "en1")?.value
+        await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en1")?.value
         XCTAssertEqual(model.health, .uncertain)
         inputs.advance(8)
         await model.checkConnectivity()?.value
         XCTAssertEqual(model.health, .offline)
         inputs.advance(8)
-        await model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")?.value
+        await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")?.value
         XCTAssertEqual(model.health, .online)
         let saved = await model.flushAndWait()
         XCTAssertTrue(saved)
@@ -159,7 +159,7 @@ private actor FaultyRepository: HistoryRepository {
         preferences.set(true, forKey: "probesDisabled")
         let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
             preferences: preferences, speedTest: { throw HistoryError("Synthetic speed test") })
-        model.updatePath(satisfied: true, signature: "metered", isMetered: true, interface: nil)
+        model.updatePath(satisfied: true, changed: true, isMetered: true, interface: nil)
         model.requestSpeedTest()
         XCTAssertEqual(model.speedTestPhase, .confirmMetered)
     }
@@ -169,10 +169,10 @@ private actor FaultyRepository: HistoryRepository {
         let gate = SpeedTestGate()
         let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
             preferences: preferences, speedTest: { try await gate.wait() })
-        model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: false, interface: "en0")
+        model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")
         model.requestSpeedTest()
         guard case .running = model.speedTestPhase else { return XCTFail("The unmetered test should run") }
-        model.updatePath(satisfied: true, signature: "Wi-Fi", isMetered: true, interface: "en0")
+        model.updatePath(satisfied: true, changed: false, isMetered: true, interface: "en0")
         XCTAssertEqual(model.speedTestPhase, .confirmMetered)
         await gate.finish()
     }
@@ -653,9 +653,9 @@ private actor FaultyRepository: HistoryRepository {
                                      responsiveness: 900, bytesUsed: 420_000_000)
         let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), repository: store, automatic: false,
             preferences: preferences, counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() },
-            speedTest: { result })
+            probe: { .success }, speedTest: { result })
         await model.start().value
-        model.meteredInterface = "en0"
+        await model.updatePath(satisfied: true, changed: true, isMetered: true, interface: "en0")?.value
         model.requestSpeedTest()
         XCTAssertEqual(model.speedTestPhase, .confirmMetered); XCTAssertTrue(model.speedTestDataNote.hasPrefix("It can use several hundred MB"))
         model.cancelSpeedTest(); XCTAssertEqual(model.speedTestPhase, .idle)
@@ -691,9 +691,8 @@ private actor FaultyRepository: HistoryRepository {
         let cancelled = await gate.sawCancellation; XCTAssertTrue(cancelled)
     }
     func testUnknownConnectionTypeAsksBeforeTesting() {
-        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false, preferences: preferences,
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), preferences: preferences,
             speedTest: { SpeedTestResult(start: Date(), end: Date(), download: 1, upload: 1) })
-        model.meteringKnown = false
         model.requestSpeedTest()
         XCTAssertEqual(model.speedTestPhase, .confirmMetered)
     }
