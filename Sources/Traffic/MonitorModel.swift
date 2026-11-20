@@ -217,7 +217,7 @@ final class MonitorModel: ObservableObject {
     @discardableResult
     func updatePath(satisfied: Bool, changed: Bool, isMetered: Bool, interface: String?) -> Task<Void, Never>? {
         if changed, probesEnabled, !isSleeping {
-            if !terminationRequested || health != .checking { takeSample() }
+            if !terminationRequested || health != .checking { sample() }
             cancelProbe()
             machine.recheckPath()
             health = machine.state; lastChecked = nil
@@ -248,10 +248,6 @@ final class MonitorModel: ObservableObject {
         RunLoop.main.add(sampler!, forMode: .common)
     }
     func sample() {
-        guard !terminationRequested else { return }
-        takeSample()
-    }
-    private func takeSample() {
         guard !isSleeping else { return }
         let date = nowProvider(), uptime = uptimeProvider()
         let elapsed = max(0, uptime - lastAccountedUptime)
