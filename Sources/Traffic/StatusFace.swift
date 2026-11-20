@@ -31,7 +31,7 @@ struct StatusRate: Equatable {
 @MainActor
 final class StatusFace: NSView {
     static let width: CGFloat = 64
-    static let textRight: CGFloat = 54
+    nonisolated static let textRight: CGFloat = 54
     static let textLeft: CGFloat = 11
     var down = StatusRate.unobserved, up = StatusRate.unobserved
     var health: ConnectionHealth = .checking
@@ -69,7 +69,7 @@ final class StatusFace: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func isAccessibilityElement() -> Bool { false }
 
-    static func text(_ rate: StatusRate, color: NSColor = .white) -> NSAttributedString {
+    nonisolated static func text(_ rate: StatusRate, color: NSColor = .white) -> NSAttributedString {
         let text = NSMutableAttributedString(string: rate.number, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium),
             .foregroundColor: color
@@ -80,15 +80,39 @@ final class StatusFace: NSView {
         return text
     }
 
-    override func draw(_ dirtyRect: NSRect) {
+    nonisolated private static func drawRates(down: StatusRate, up: StatusRate, in bounds: NSRect, color: NSColor) {
         // Center the two baselines in both standard and taller menu bars.
         let bottom = (bounds.height - 24) / 2 + 1
         for (arrow, rate, y) in [("↓", down, bottom + 11), ("↑", up, bottom)] {
-            let color = NSColor.white
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9, weight: .medium), .foregroundColor: color]
             (arrow as NSString).draw(at: NSPoint(x: 3, y: y), withAttributes: attributes)
             let text = Self.text(rate, color: color)
             text.draw(at: NSPoint(x: Self.textRight - text.size().width, y: y))
+        }
+    }
+
+    private func installRateImage(on button: NSStatusBarButton) {
+        let down = down, up = up
+        let image = NSImage(size: NSSize(width: Self.width, height: 22), flipped: false) { bounds in
+            Self.drawRates(down: down, up: up, in: bounds, color: .black)
+            return true
+        }
+        image.isTemplate = true
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.image = image
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if let button = superview as? NSStatusBarButton { installRateImage(on: button) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // The real status button tints its template for the local menu bar, including its highlight.
+        // Standalone sample renders have no status button to supply that tint.
+        if !(superview is NSStatusBarButton) {
+            Self.drawRates(down: down, up: up, in: bounds, color: menuAppearanceName == .darkAqua ? .white : .black)
         }
         Self.ink(health.nsColor, appearance: menuAppearanceName).setFill()
         NSBezierPath(ovalIn: NSRect(x: 57, y: bounds.midY - 2, width: 4, height: 4)).fill()
@@ -99,8 +123,13 @@ final class StatusFace: NSView {
         popoverOpen = model.popoverOpen
         let down = model.rateAvailable ? StatusRate(model.down) : .unobserved
         let up = model.rateAvailable ? StatusRate(model.up) : .unobserved
-        if self.down != down || self.up != up || health != model.health {
-            self.down = down; self.up = up; health = model.health; needsDisplay = true
+        if self.down != down || self.up != up {
+            self.down = down; self.up = up
+            if let button = superview as? NSStatusBarButton { installRateImage(on: button) }
+            needsDisplay = true
+        }
+        if health != model.health {
+            health = model.health; needsDisplay = true
         }
     }
 }

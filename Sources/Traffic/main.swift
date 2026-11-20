@@ -31,12 +31,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // Finish the control's action before AppKit changes appearances.
             Task { @MainActor [weak self] in self?.applyAppearance() }
         }
-        NSApp.mainMenu = TrafficApplicationMenu.make(target: self, settings: #selector(showSettings), about: #selector(showAbout))
+        NSApp.mainMenu = TrafficApplicationMenu.make(target: self, settings: #selector(showSettings), about: #selector(showAbout), check: #selector(checkUpdates))
         NSApp.windowsMenu = NSApp.mainMenu?.item(withTitle: "Window")?.submenu
         applyAppearance()
         appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             Task { @MainActor [weak self] in self?.updateSystemAppearance() }
         }
+        model.updates.scheduleAutomaticChecks()
         model.evaluateLoginItemOffer()
         model.start(); updateStatus(); profileUI("started")
         // First install: open the panel once so the person sees where Current lives and the login offer.
@@ -128,6 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuPopover.close()
         model.refreshLoginItemStatus()
         settings.show(); profileUI("settings_shown")
+    }
+    @objc private func checkUpdates() {
+        model.updates.check(); showAbout()
     }
     @objc private func showAbout() {
         menuPopover.close(); model.refreshLoginItemStatus()

@@ -1,8 +1,8 @@
 #!/bin/zsh
 set -eu
 cd "${0:A:h}/.."
-version=0.1.4
-build=5
+version=0.1.5
+build=6
 # CURRENT_UNIVERSAL=1 builds Apple silicon and Intel slices; CURRENT_SIGN_IDENTITY signs for distribution.
 archs=()
 [[ "${CURRENT_UNIVERSAL:-0}" == 1 ]] && archs=(--arch arm64 --arch x86_64)

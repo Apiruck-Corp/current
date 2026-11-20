@@ -51,10 +51,11 @@ import SwiftUI
     func testSettingsMenuHasStandardShortcutAndNoConfigurationSubmenus() {
         _ = NSApplication.shared
         let target = SettingsMenuTarget()
-        let menu = TrafficApplicationMenu.make(target: target, settings: #selector(SettingsMenuTarget.settings), about: #selector(SettingsMenuTarget.about))
+        let menu = TrafficApplicationMenu.make(target: target, settings: #selector(SettingsMenuTarget.settings), about: #selector(SettingsMenuTarget.about), check: #selector(SettingsMenuTarget.checkUpdates))
         let app = menu.items[0].submenu!
         XCTAssertEqual(app.title, "Current")
         XCTAssertNotNil(app.item(withTitle: "About Current"))
+        XCTAssertEqual(app.item(withTitle: "Check for Updates…")?.action, #selector(SettingsMenuTarget.checkUpdates))
         XCTAssertNotNil(app.item(withTitle: "Quit Current"))
         let settings = app.item(withTitle: "Settings…")!
         XCTAssertEqual(settings.keyEquivalent, ",")
@@ -188,7 +189,7 @@ import SwiftUI
         let controller = SettingsWindowController(model: model(name), showHistory: {}, frameAutosaveName: nil)
         defer { controller.window?.close() }
         let target = SettingsMenuTarget(); target.onSettings = { controller.show() }
-        let menu = TrafficApplicationMenu.make(target: target, settings: #selector(SettingsMenuTarget.settings), about: #selector(SettingsMenuTarget.about))
+        let menu = TrafficApplicationMenu.make(target: target, settings: #selector(SettingsMenuTarget.settings), about: #selector(SettingsMenuTarget.about), check: #selector(SettingsMenuTarget.checkUpdates))
         for _ in 0..<3 {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: controller.window?.windowNumber ?? 0,
@@ -281,4 +282,5 @@ import SwiftUI
     var onSettings: (() -> Void)?
     @objc func settings() { calls += 1; onSettings?() }
     @objc func about() {}
+    @objc func checkUpdates() { calls += 1 }
 }

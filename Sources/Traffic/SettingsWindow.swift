@@ -102,7 +102,7 @@ enum SettingsTab: String, CaseIterable, Sendable {
 }
 
 @MainActor enum TrafficApplicationMenu {
-    static func make(target: AnyObject, settings: Selector, about: Selector) -> NSMenu {
+    static func make(target: AnyObject, settings: Selector, about: Selector, check: Selector) -> NSMenu {
         let menu = NSMenu()
         let app = NSMenu(title: "Current")
         func action(_ title: String, _ selector: Selector, _ key: String = "", target receiver: AnyObject? = nil) -> NSMenuItem {
@@ -110,6 +110,7 @@ enum SettingsTab: String, CaseIterable, Sendable {
             item.target = receiver; return item
         }
         app.addItem(action("About Current", about, target: target))
+        app.addItem(action("Check for Updates…", check, target: target))
         app.addItem(.separator())
         app.addItem(action("Settings…", settings, ",", target: target))
         app.addItem(.separator())
