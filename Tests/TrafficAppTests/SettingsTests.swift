@@ -63,6 +63,14 @@ import SwiftUI
         app.performActionForItem(at: app.index(of: settings))
         XCTAssertEqual(target.calls, 1)
     }
+    func testAboutMatchesThePackageVersionOutsideAnAppBundle() throws {
+        let package = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let builder = try String(contentsOf: package.appendingPathComponent("scripts/build-app.sh"), encoding: .utf8)
+        let assignment = try XCTUnwrap(builder.split(whereSeparator: \.isNewline).first { $0.hasPrefix("version=") })
+        let version = assignment.dropFirst("version=".count)
+        XCTAssertEqual(SettingsPane.version, String(version))
+    }
     func testNativeWindowReusesStableFrameAcrossTabsAndReleasesOnClose() throws {
         try native()
         let name = "org.traffic.settings-native.\(UUID())"
