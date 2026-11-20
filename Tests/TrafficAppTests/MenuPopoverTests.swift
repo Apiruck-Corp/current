@@ -252,11 +252,18 @@ import TrafficCore
         await model.start().value; await model.loadPeriod()
         model.rateAvailable = true; model.down = 10; model.up = 10
         model.connectionDetails = [ConnectionDetail(kind: .wifi, interfaces: ["en0"], down: 0, up: 0)]
-        let panel = MenuPopover()
+        // Keep the layout fixture open when another app becomes active on the test Mac.
+        // Outside-click and application-switch dismissal have separate native tests.
+        let panel = NSPopover()
+        panel.behavior = .applicationDefined
+        panel.animates = false
+        let content = PopoverView(model: model, showHistory: {}, showSettings: {}, quit: {})
+            .focusable().focusEffectDisabled().onExitCommand { [weak panel] in panel?.close() }
+        panel.contentViewController = EscapeHostingController(rootView: content) { [weak panel] in panel?.close() }
+        panel.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
         defer { panel.close() }
-        panel.show(PopoverView(model: model, showHistory: {}, showSettings: {}, quit: {}), relativeTo: anchor)
         pump(); pump()
-        let popup = try XCTUnwrap(panel.popover.contentViewController?.view.window)
+        let popup = try XCTUnwrap(panel.contentViewController?.view.window)
         let baseline = popup.frame
         for iteration in 0..<3 {
             for period in HistoryPeriod.allCases {
