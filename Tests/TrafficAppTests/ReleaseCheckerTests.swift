@@ -19,7 +19,7 @@ import XCTest
         XCTAssertThrowsError(try release("v0.1.6/other"))
     }
 
-    func testCheckFindsNewReleaseAndRemembersItBetweenLaunches() async {
+    func testCheckFindsNewReleaseAndRemembersItBetweenLaunches() async throws {
         let suite = "org.traffic.updates.\(UUID())"
         let prefs = UserDefaults(suiteName: suite)!
         defer { prefs.removePersistentDomain(forName: suite) }
@@ -38,6 +38,8 @@ import XCTest
         XCTAssertEqual(restarted.available, "0.1.5")
         await restarted.check().value
         XCTAssertEqual(restarted.status, .failed)
+        let retry = try XCTUnwrap(prefs.object(forKey: "nextReleaseCheck") as? Date)
+        XCTAssertEqual(retry.timeIntervalSinceNow, 3600, accuracy: 5)
         XCTAssertEqual(restarted.available, "0.1.5")
         restarted.setAutomatic(false)
         checker.setAutomatic(false)
