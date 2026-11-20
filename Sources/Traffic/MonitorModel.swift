@@ -106,6 +106,7 @@ final class MonitorModel: ObservableObject {
     private var observationsDuringQuit: [Observation]?
     private var terminationRequested: Bool { observationsDuringQuit != nil }
     let dataURL: URL
+    let updates: ReleaseChecker
     private let preferences: UserDefaults
     private let automatic: Bool
     private let counterProvider: @Sendable () throws -> [InterfaceCounter]
@@ -128,6 +129,7 @@ final class MonitorModel: ObservableObject {
          inventory: @escaping @Sendable (Bool) async -> ConnectionInventory = { await NetworkInventory.read(includeTailscale: $0) },
          speedTest: @escaping @Sendable () async throws -> SpeedTestResult = { try await SpeedTestRunner.run() },
          loginItem: (any LoginItemControl)? = nil) {
+        updates = ReleaseChecker(installed: SettingsPane.version, preferences: preferences)
         self.preferences = preferences
         self.loginItem = loginItem ?? SystemLoginItem()
         speedTestProvider = speedTest
@@ -567,6 +569,7 @@ final class MonitorModel: ObservableObject {
         flush(); onStatusChange?()
     }
     func didWake() {
+        if automatic { updates.scheduleAutomaticChecks() }
         let now = nowProvider()
         if let start = sleepStart { append(Observation(start: start, end: now, coverage: .sleep)) }
         let uptime = uptimeProvider()

@@ -4,7 +4,7 @@ import TrafficCore
 @testable import Traffic
 
 @MainActor final class StatusFaceTests: XCTestCase {
-    func testMenuRatesDrawWhiteInEveryPaletteWithSeparateHealthColor() throws {
+    func testMenuRatesDrawLightOnDarkWithSeparateHealthColor() throws {
         let previous = TrafficPalette.settings
         defer { TrafficPalette.apply(previous) }
         for theme in TrafficColorTheme.allCases {
@@ -16,6 +16,7 @@ import TrafficCore
             context.cgContext.scaleBy(x: 2, y: 2)
             NSColor(white: 0.15, alpha: 1).setFill(); NSRect(x: 0, y: 0, width: 64, height: 24).fill()
             let face = StatusFace(frame: NSRect(x: 0, y: 0, width: 64, height: 24))
+            face.menuAppearanceName = .darkAqua
             face.down = StatusRate(842_000); face.up = StatusRate(125_000); face.health = .online
             face.draw(face.bounds); NSGraphicsContext.restoreGraphicsState()
             for rows in [0..<24, 24..<48] {
@@ -31,6 +32,20 @@ import TrafficCore
             let dot = try XCTUnwrap(bitmap.colorAt(x: 118, y: 24)?.usingColorSpace(.sRGB))
             XCTAssertGreaterThan(dot.greenComponent, dot.redComponent, "Health must stay separate from white rates")
         }
+    }
+    func testStatusButtonUsesTemplateInkForTheCurrentMenuBar() throws {
+        let item = NSStatusBar.system.statusItem(withLength: StatusFace.width)
+        defer { NSStatusBar.system.removeStatusItem(item) }
+        let button = try XCTUnwrap(item.button)
+        let face = StatusFace(frame: button.bounds)
+        button.addSubview(face)
+        let model = MonitorModel(automatic: false)
+        model.rateAvailable = true; model.down = 12_300; model.up = 53_300
+        face.update(model)
+        XCTAssertTrue(try XCTUnwrap(button.image).isTemplate)
+        let before = button.image
+        model.down = 32_000; face.update(model)
+        XCTAssertFalse(before === button.image)
     }
     func testDirectionInkContrastInLightAndDarkAppearances() throws {
         func luminance(_ color: NSColor) throws -> Double {
@@ -131,7 +146,7 @@ import TrafficCore
             NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
             defer { NSGraphicsContext.restoreGraphicsState() }
             context.cgContext.scaleBy(x: 2, y: 2)
-            NSColor(white: menu == .aqua ? 0.35 : 0.15, alpha: 1).setFill()
+            NSColor(white: menu == .aqua ? 0.88 : 0.15, alpha: 1).setFill()
             NSRect(x: 0, y: 0, width: 64, height: 24).fill()
             let face = StatusFace(frame: NSRect(x: 0, y: 0, width: 64, height: 24))
             face.menuAppearanceName = menu; face.down = StatusRate(842_000); face.up = StatusRate(125_000); face.health = .online
@@ -181,7 +196,7 @@ import TrafficCore
                 let face = StatusFace(frame: NSRect(x: 0, y: 0, width: 64, height: 24))
                 face.menuAppearanceName = menu; face.down = StatusRate(842_000); face.up = StatusRate(125_000); face.health = .online
                 NSGraphicsContext.saveGraphicsState(); context.cgContext.translateBy(x: x, y: y)
-                NSColor(white: menu == .aqua ? 0.35 : 0.15, alpha: 1).setFill(); face.bounds.fill()
+                NSColor(white: menu == .aqua ? 0.88 : 0.15, alpha: 1).setFill(); face.bounds.fill()
                 let drawing = selected ? (menu == .aqua ? NSAppearance.Name.darkAqua : .aqua) : menu
                 NSAppearance(named: drawing)!.performAsCurrentDrawingAppearance { face.draw(face.bounds) }
                 NSGraphicsContext.restoreGraphicsState()

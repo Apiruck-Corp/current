@@ -136,7 +136,7 @@ struct SettingsPane: View {
     static var version: String {
         guard Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Current",
               let release = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else {
-            return "0.1.4"
+            return "0.1.5"
         }
         return release
     }
@@ -155,12 +155,11 @@ struct SettingsPane: View {
             LabeledContent("Author", value: "Pierre-Olivier Carles")
             LabeledContent("License", value: "MIT")
             LabeledContent("Source") {
-                Link("github.com/pocarles/current", destination: URL(string: "https://github.com/pocarles/current")!)
+                Link("github.com/Apiruck-Corp/current", destination: URL(string: "https://github.com/Apiruck-Corp/current")!)
             }
-            LabeledContent("Updates") {
-                Link("Releases on GitHub", destination: URL(string: "https://github.com/pocarles/current/releases")!)
-            }
-        } footer: { footer("© 2026 Pierre-Olivier Carles. Current has no account, analytics or automatic updater.") }
+        }
+        UpdateSettings(checker: model.updates)
+
     }
 }
 

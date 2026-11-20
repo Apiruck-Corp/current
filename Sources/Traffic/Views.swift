@@ -151,6 +151,7 @@ struct PopoverView: View {
                 Button(action: showHistory) { Label("History", systemImage: "clock.arrow.circlepath") }
                     .buttonStyle(.plain).help("View history stored on this Mac")
                 Spacer()
+                AvailableUpdateButton(checker: model.updates, showAbout: showAbout)
                 if model.lowPower { Label("Low Power Mode", systemImage: "leaf").help("Checks every 2 minutes and samples less often while closed.") }
             }.font(.system(size: 12)).foregroundStyle(.secondary)
         }
@@ -185,7 +186,9 @@ struct PopoverView: View {
                 PanelPinButton(pinned: pinned) {
                     pinned.toggle(); setPinned(pinned)
                 }.frame(width: 28, height: 28)
-                PanelSettingsButton(settings: showSettings, about: showAbout, quit: quit)
+                PanelSettingsButton(settings: showSettings, about: showAbout, check: {
+                    model.updates.check(); showAbout()
+                }, quit: quit)
                     .frame(width: 28, height: 28)
             }
         }
@@ -363,8 +366,9 @@ struct PanelPinButton: NSViewRepresentable {
 struct PanelSettingsButton: NSViewRepresentable {
     let settings: () -> Void
     let about: () -> Void
+    let check: () -> Void
     let quit: () -> Void
-    func makeCoordinator() -> Coordinator { Coordinator(settings: settings, about: about, quit: quit) }
+    func makeCoordinator() -> Coordinator { Coordinator(settings: settings, about: about, check: check, quit: quit) }
     func makeNSView(context: Context) -> NSPopUpButton {
         let button = NSPopUpButton(frame: .zero, pullsDown: true)
         button.isBordered = false
@@ -374,6 +378,7 @@ struct PanelSettingsButton: NSViewRepresentable {
         icon.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil); menu.addItem(icon)
         for (title, action, key) in [("Settings…", #selector(Coordinator.openSettings), ","),
                                      ("About Current", #selector(Coordinator.openAbout), ""),
+                                     ("Check for Updates…", #selector(Coordinator.checkUpdates), ""),
                                      ("Quit Current", #selector(Coordinator.exit), "q")] {
             if title == "Quit Current" { menu.addItem(.separator()) }
             let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
@@ -384,15 +389,16 @@ struct PanelSettingsButton: NSViewRepresentable {
         return button
     }
     func updateNSView(_ button: NSPopUpButton, context: Context) {
-        context.coordinator.settings = settings; context.coordinator.about = about; context.coordinator.quit = quit
+        context.coordinator.settings = settings; context.coordinator.about = about; context.coordinator.check = check; context.coordinator.quit = quit
     }
     @MainActor final class Coordinator: NSObject {
-        var settings: () -> Void, about: () -> Void, quit: () -> Void
-        init(settings: @escaping () -> Void, about: @escaping () -> Void, quit: @escaping () -> Void) {
-            self.settings = settings; self.about = about; self.quit = quit
+        var settings: () -> Void, about: () -> Void, check: () -> Void, quit: () -> Void
+        init(settings: @escaping () -> Void, about: @escaping () -> Void, check: @escaping () -> Void, quit: @escaping () -> Void) {
+            self.settings = settings; self.about = about; self.check = check; self.quit = quit
         }
         @objc func openSettings() { settings() }
         @objc func openAbout() { about() }
+        @objc func checkUpdates() { check() }
         @objc func exit() { quit() }
     }
 }

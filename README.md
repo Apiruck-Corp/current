@@ -14,7 +14,7 @@ Current shows download and upload rates together, with a separate internet-healt
 
 [Download Current for macOS](https://github.com/Apiruck-Corp/current/releases/latest/download/Current.dmg). Open the DMG and drag Current to Applications.
 
-The installer is Developer ID signed, Apple notarized and stapled. Requires macOS 14 or later and contains Apple Silicon and Intel binaries. Runtime verification has been performed on Apple Silicon; Intel hardware has not yet been tested. Updates are installed manually from [GitHub Releases](https://github.com/Apiruck-Corp/current/releases). Current does not install itself at login.
+The installer is Developer ID signed, Apple notarized and stapled. Requires macOS 14 or later and contains Apple Silicon and Intel binaries. Runtime verification has been performed on Apple Silicon; Intel hardware has not yet been tested. Choose **Check for Updates…** in the panel’s ••• menu or in **Settings → About**. For a daily check, turn on **Automatically check for updates** in About. When a newer version is available, download the signed installer and drag Current to Applications. Current does not install itself at login.
 
 ## Features
 
@@ -52,6 +52,8 @@ Internet checks contact `https://www.gstatic.com/generate_204`, with `https://cp
 
 Healthy checks normally run every 30 seconds, or every 120 seconds in Low Power Mode. Two failed rounds at least five seconds apart confirm an outage. Unexpected pages remain uncertain. A successful endpoint check does not guarantee every site is reachable. Checks can be paused without stopping passive traffic measurement. There are no continuous speed tests or network scans.
 
+Manual and optional daily update checks contact GitHub’s public releases API. GitHub sees your public IP and the app’s user agent. Automatic checks are off by default.
+
 The speed test runs only when you ask. It uses macOS's built-in `networkQuality` tool, which contacts Apple's servers and moves data at full speed for about 12 seconds. Faster connections use more data, often several hundred MB. On a connection macOS marks as metered, such as a phone hotspot, Current asks before starting. If your Mac switches to a metered connection during a test, Current stops the test and asks before starting another. The result is stored in preferences and logged as a history event. The test's own traffic also appears in measured totals.
 
 ## History and backups
@@ -60,11 +62,13 @@ Writes are batched about once a minute, with additional saves around lifecycle a
 
 See [history and accuracy](docs/history.md) for retention, schema migrations, gaps, estimates and backup restoration. CSV uses UTC days. Backup includes retained resolutions and pending committed WAL data. Restoration is a manual file workflow after quitting Current.
 
-## What’s new in Current 0.1.4
+## What’s new in Current 0.1.5
 
-If a speed test is running when your Mac switches to a metered hotspot, Current stops it and asks before starting again. It also checks the new network before reporting that you’re back online. Outage history keeps the time you spent awake and offline even if the clock changes or a traffic reading is missed. The 7-day history filter now shows exactly seven UTC dates, including today, and the live graph redraws faster.
+The menu-bar rates now use the same automatic light or dark ink as other macOS status items. Current can check GitHub for updates on demand or once a day if enabled.
 
-[See Current in action](https://pocarles.com/current/) · [Read the 0.1.4 release notes](https://github.com/Apiruck-Corp/current/releases/tag/v0.1.4)
+In 0.1.4, if a speed test is running when your Mac switches to a metered hotspot, Current stops it and asks before starting again. It also checks the new network before reporting that you’re back online. Outage history keeps the time you spent awake and offline even if the clock changes or a traffic reading is missed. The 7-day history filter now shows exactly seven UTC dates, including today, and the live graph redraws faster.
+
+[See Current in action](https://pocarles.com/current/) · [Release notes](https://github.com/Apiruck-Corp/current/releases)
 
 ## Build
 
