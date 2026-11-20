@@ -29,10 +29,9 @@ final class MonitorModel: ObservableObject {
     @Published var noticesEnabled = false
     @Published var probesEnabled = true
     @Published var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-    /// Primary interface macOS marks as metered (phone hotspot), or nil.
-    @Published var meteredInterface: String?
-    /// False until the first path report, so a hotspot is never mistaken for "not metered" at launch.
-    @Published var meteringKnown: Bool
+    /// Nil until macOS reports the cost. A metered path can have no named interface.
+    @Published private(set) var pathIsMetered: Bool?
+    private var meteredInterface: String?
     @Published private(set) var speedTestPhase = SpeedTestPhase.idle
     @Published private(set) var lastSpeedTest: SpeedTestResult?
     @Published private(set) var loginItemStatus = LoginItemStatus.unavailable
@@ -45,7 +44,9 @@ final class MonitorModel: ObservableObject {
         scheduleSampler()
         if popoverOpen { Task { await refreshConnectionInventory(includeTailscale: true) } }
     } }
-    var historyOpen = false
+    var historyOpen = false {
+        didSet { if !historyOpen { historyGeneration += 1 } }
+    }
     var displayedChart: PeriodChart {
         if period == .hour {
             let end = graph.last?.end ?? nowProvider()
@@ -70,7 +71,7 @@ final class MonitorModel: ObservableObject {
     private var inventoryLoading = false
     private var inventoryNeedsTailscale = false
     private var inventoryHadTailscale = false
-    private var pathSignature: String?
+    private var lastPath: NWPath?
     private let inventoryProvider: @Sendable (Bool) async -> ConnectionInventory
     private var machine = HealthMachine()
     private var connectionStreak = ConnectionStreak()
@@ -97,9 +98,13 @@ final class MonitorModel: ObservableObject {
     private var tokens: [NSObjectProtocol] = []
     private var workspaceTokens: [NSObjectProtocol] = []
     private var historyDays = 30
-    private var healthSince = Date()
-    private var lastAccounted = Date()
-    private var terminationRequested = false
+    private var historyGeneration = 0
+    private var lastAccounted: Date
+    private var lastAccountedUptime: TimeInterval
+    // A successful quit ends history at the request. Keep any intervening path or
+    // sleep boundary in memory until we know whether monitoring has to resume.
+    private var observationsDuringQuit: [Observation]?
+    private var terminationRequested: Bool { observationsDuringQuit != nil }
     let dataURL: URL
     private let preferences: UserDefaults
     private let automatic: Bool
@@ -126,7 +131,7 @@ final class MonitorModel: ObservableObject {
         self.preferences = preferences
         self.loginItem = loginItem ?? SystemLoginItem()
         speedTestProvider = speedTest
-        meteringKnown = !automatic
+        pathIsMetered = automatic ? nil : false
         lastSpeedTest = preferences.data(forKey: "lastSpeedTest")
             .flatMap { try? JSONDecoder().decode(SpeedTestResult.self, from: $0) }.flatMap { $0.isPlausible ? $0 : nil }
         appearance = TrafficAppearanceSettings(preferences: preferences)
@@ -134,7 +139,7 @@ final class MonitorModel: ObservableObject {
         probesEnabled = !preferences.bool(forKey: "probesDisabled")
         self.automatic = automatic; counterProvider = counters; uptimeProvider = uptime
         nowProvider = now; probeProvider = probe; inventoryProvider = inventory; store = repository
-        lastAccounted = now(); lastFlush = uptime(); healthSince = now()
+        lastAccounted = now(); lastAccountedUptime = uptime(); lastFlush = lastAccountedUptime
         persistedDay = Calendar.current.startOfDay(for: now())
         if let dataURL { self.dataURL = dataURL; return }
 
@@ -171,10 +176,11 @@ final class MonitorModel: ObservableObject {
     private func beginMonitoring() {
         guard !terminationRequested else { return }
         started = true
-        let now = nowProvider(); lastAccounted = now
+        let now = nowProvider(), uptime = uptimeProvider()
+        lastAccounted = now; lastAccountedUptime = uptime
         if let counters = try? counterProvider() {
-            engine.rebaseline(counters, at: now, uptime: uptimeProvider())
-            detailEngine.rebaseline(counters, at: now, uptime: uptimeProvider()); lastCounters = counters
+            engine.rebaseline(counters, at: now, uptime: uptime)
+            detailEngine.rebaseline(counters, at: now, uptime: uptime); lastCounters = counters
         }
         scheduleSampler()
         if automatic { Task { await refreshConnectionInventory(includeTailscale: false) } }
@@ -183,21 +189,15 @@ final class MonitorModel: ObservableObject {
             return
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            let satisfied = path.status == .satisfied
-            let metered = path.isExpensive || path.isConstrained ? path.availableInterfaces.first?.name : nil
-            let signature = String(describing: path.status) + path.availableInterfaces.map { "\($0.name)#\($0.index)" }.sorted().joined(separator: "|")
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 guard let self else { return }
-                if self.pathSignature != nil && self.pathSignature != signature { self.invalidateConnectionInterval() }
-                self.pathSignature = signature
-                self.pathSatisfied = satisfied
-                self.meteringKnown = true
-                if self.meteredInterface != metered { self.meteredInterface = metered; self.rebuildConnectionDetails() }
-                if self.popoverOpen { Task { await self.refreshConnectionInventory(includeTailscale: true, force: true) } }
-                self.checkConnectivity()
+                let changed = self.lastPath != path
+                self.lastPath = path
+                self.updatePath(satisfied: path.status == .satisfied, changed: changed,
+                    isMetered: path.isExpensive || path.isConstrained, interface: path.availableInterfaces.first?.name)
             }
         }
-        pathMonitor.start(queue: DispatchQueue(label: "Traffic.path", qos: .utility))
+        pathMonitor.start(queue: .main)
         let center = NSWorkspace.shared.notificationCenter
         workspaceTokens.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.willSleep() }
@@ -213,11 +213,33 @@ final class MonitorModel: ObservableObject {
             }
         })
         if !probesEnabled { machine.reset(to: .disabled); health = .disabled }
-        checkConnectivity()
+    }
+    @discardableResult
+    func updatePath(satisfied: Bool, changed: Bool, isMetered: Bool, interface: String?) -> Task<Void, Never>? {
+        if changed, probesEnabled, !isSleeping {
+            if !terminationRequested || health != .checking { sample() }
+            cancelProbe()
+            machine.recheckPath()
+            health = machine.state; lastChecked = nil
+            invalidateConnectionInterval()
+            onStatusChange?()
+        }
+        if isMetered, changed || pathIsMetered != true, case .running = speedTestPhase {
+            stopSpeedTest()
+            speedTestPhase = .confirmMetered
+        } else if !isMetered, speedTestPhase == .confirmMetered {
+            speedTestPhase = .idle
+        }
+        pathSatisfied = satisfied
+        pathIsMetered = isMetered
+        let metered = isMetered ? interface : nil
+        if meteredInterface != metered { meteredInterface = metered; rebuildConnectionDetails() }
+        if popoverOpen, !terminationRequested { Task { await refreshConnectionInventory(includeTailscale: true, force: true) } }
+        return checkConnectivity()
     }
     private func scheduleSampler() {
         sampler?.invalidate(); sampler = nil
-        guard started, automatic, !isSleeping else { return }
+        guard started, automatic, !isSleeping, !terminationRequested else { return }
         let interval: Double = lowPower && !popoverOpen ? 5 : 1
         sampler = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.sample() }
@@ -227,44 +249,54 @@ final class MonitorModel: ObservableObject {
     }
     func sample() {
         guard !isSleeping else { return }
-        let date = nowProvider()
+        let date = nowProvider(), uptime = uptimeProvider()
+        let elapsed = max(0, uptime - lastAccountedUptime)
+        let wall = date.timeIntervalSince(lastAccounted)
+        let clockChanged = wall < 0 || abs(wall - elapsed) >= CounterEngine.clockTolerance
         // A probe can close a sample at the same timestamp as the timer.
         // Duplicate instants add no data and must not break a valid interval.
-        guard date != lastAccounted else { return }
-        var observed = false
+        guard wall != 0 || clockChanged else { return }
+        var observation = Observation(start: lastAccounted, end: date, coverage: .unobserved)
         do {
             let counters = try counterProvider()
             lastCounters = counters
-            lastRates = detailEngine.sample(counters, at: date, uptime: uptimeProvider())
-            for rate in lastRates where (rate.down ?? 0) + (rate.up ?? 0) >= ConnectionDetail.busyRate { lastBusy[rate.name] = uptimeProvider() }
-            if popoverOpen { rebuildConnectionDetails() }
-            if var observation = engine.sample(counters, at: date, uptime: uptimeProvider()) {
-                let healthDuration = max(0, observation.end.timeIntervalSince(max(observation.start, healthSince)))
-                if health == .offline { observation.offlineSeconds = min(observation.duration, healthDuration) }
-                if health == .uncertain || health == .checking || health == .disabled { observation.uncertainSeconds = min(observation.duration, healthDuration) }
-                append(observation)
-                down = observation.peakDown; up = observation.peakUp
-                rateAvailable = observation.coverage == .observed || (observation.coverage == .partial && (observation.received > 0 || observation.sent > 0))
-                observed = observation.coverage == .observed
-                lastAccounted = date
-            } else if date > lastAccounted {
-                append(Observation(start: lastAccounted, end: date, coverage: .unobserved))
-                lastAccounted = date
-            }
-            interfaces = engine.interfaces
+            lastRates = detailEngine.sample(counters, at: date, uptime: uptime)
+            for rate in lastRates where (rate.down ?? 0) + (rate.up ?? 0) >= ConnectionDetail.busyRate { lastBusy[rate.name] = uptime }
+            if let reading = engine.sample(counters, at: date, uptime: uptime) { observation = reading }
         } catch {
-            append(Observation(start: lastAccounted, end: date, coverage: .unobserved))
-            lastAccounted = date; down = 0; up = 0; rateAvailable = false
-            engine = CounterEngine(); detailEngine = InterfaceRateEngine(); lastRates = []
-            if popoverOpen { rebuildConnectionDetails() }
+            engine = CounterEngine(); detailEngine = InterfaceRateEngine(); lastCounters = []; lastRates = []
         }
-        connectionStreak.advance(uptime: uptimeProvider(), observed: observed && health == .online, freshness: checkFreshness)
+        if clockChanged, elapsed > 0, observation.coverage == .unobserved {
+            // Anchor the awake interval to the corrected clock. Any skipped dates have
+            // no readings or health evidence of their own.
+            let correctedStart = date.addingTimeInterval(-elapsed)
+            if correctedStart > lastAccounted {
+                append(Observation(start: lastAccounted, end: correctedStart, coverage: .unobserved))
+            }
+            observation.start = correctedStart
+        }
+        // Reachability comes from the probes, even when traffic counters fail.
+        let awakeSeconds = min(observation.duration, elapsed)
+        if health == .offline { observation.offlineSeconds = awakeSeconds }
+        if health == .uncertain || health == .checking || health == .disabled { observation.uncertainSeconds = awakeSeconds }
+        lastAccounted = date; lastAccountedUptime = uptime
+        append(observation)
+        down = observation.peakDown; up = observation.peakUp
+        let observed = observation.coverage == .observed
+        rateAvailable = observed || (observation.coverage == .partial && (observation.received > 0 || observation.sent > 0))
+        interfaces = engine.interfaces
+        if popoverOpen { rebuildConnectionDetails() }
+        connectionStreak.advance(uptime: uptime, observed: observed && health == .online, freshness: checkFreshness)
         connectedDuration = connectionStreak.duration
-        if uptimeProvider() - lastFlush >= 60 { flush() }
+        if uptime - lastFlush >= 60, !terminationRequested { flush() }
         onStatusChange?()
     }
     private func append(_ observation: Observation) {
         guard observation.duration > 0 else { return }
+        if terminationRequested {
+            observationsDuringQuit?.append(observation)
+            return
+        }
         persistence.append(observation)
         liveGraph.append(observation)
         if let first = liveGraph.points.first {
@@ -344,9 +376,15 @@ final class MonitorModel: ObservableObject {
             finishingFlush = false; rebuildToday(); completion?(true)
         }
     }
+    private func cancelProbe() {
+        probeGeneration += 1
+        probeTimer?.invalidate(); probeTimer = nil
+        probeTask?.cancel(); probeTask = nil
+        probing = false; checkInProgress = false; checkPending = false
+    }
     private func scheduleProbe(after interval: Double) {
         probeTimer?.invalidate(); probeTimer = nil
-        guard automatic, probesEnabled, !isSleeping else { return }
+        guard automatic, probesEnabled, !isSleeping, !terminationRequested else { return }
         probeTimer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.checkConnectivity() }
         }
@@ -355,7 +393,7 @@ final class MonitorModel: ObservableObject {
     }
     @discardableResult
     func checkConnectivity() -> Task<Void, Never>? {
-        guard probesEnabled, !isSleeping else { return nil }
+        guard probesEnabled, !isSleeping, !terminationRequested else { return nil }
         if probing { return probeTask }
         let elapsed = uptimeProvider() - lastProbeStarted
         guard elapsed >= 5 else { scheduleProbe(after: 5 - elapsed); return nil }
@@ -370,15 +408,13 @@ final class MonitorModel: ObservableObject {
             // Close the current sample before a health transition to preserve elapsed state.
             sample()
             var flushTransition = false
-            if let transition = machine.receive(outcome, at: date) {
-                healthSince = date
+            if let transition = machine.receive(outcome, at: date, uptime: uptimeProvider()) {
                 flushTransition = transition.to == .uncertain || transition.from == .uncertain
                 persistence.event(at: date, kind: transition.to.rawValue, detail: transition.to.label)
                 if transition.to == .offline && transition.newOutage {
                     notify(title: "Internet connection lost", body: "Two checks failed. Current will keep checking.")
                     flushTransition = true
-                } else if transition.outageStart != nil && transition.to == .online {
-                    let duration = transition.outageStart.map { date.timeIntervalSince($0) } ?? 0
+                } else if let duration = transition.outageDuration, transition.to == .online {
                     persistence.event(at: date, kind: "recovery", detail: "Reachability recovered \(Int(duration)) seconds after outage confirmation. Intervening uncertain checks may be included.")
                     notify(title: "Internet connection restored", body: "Connection returned after \(Format.duration(duration)).")
                     flushTransition = true
@@ -438,7 +474,7 @@ final class MonitorModel: ObservableObject {
     func requestSpeedTest() {
         if case .running = speedTestPhase { return }
         guard !isSleeping else { return }
-        if (meteredInterface != nil || !meteringKnown) && speedTestPhase != .confirmMetered { speedTestPhase = .confirmMetered; return }
+        if pathIsMetered != false && speedTestPhase != .confirmMetered { speedTestPhase = .confirmMetered; return }
         let started = nowProvider()
         speedTestPhase = .running(since: started)
         speedTestTask = Task {
@@ -496,9 +532,8 @@ final class MonitorModel: ObservableObject {
     func setProbes(_ enabled: Bool) {
         sample()
         probesEnabled = enabled; preferences.set(!enabled, forKey: "probesDisabled")
-        probeGeneration += 1; probeTask?.cancel(); probeTask = nil; probing = false; probeTimer?.invalidate()
-        checkInProgress = false; checkPending = false
-        machine.reset(to: enabled ? .checking : .disabled); health = machine.state; lastChecked = nil; healthSince = nowProvider()
+        cancelProbe()
+        machine.reset(to: enabled ? .checking : .disabled); health = machine.state; lastChecked = nil
         invalidateConnectionInterval()
         persistence.event(at: nowProvider(), kind: enabled ? "checks_resumed" : "checks_paused", detail: enabled ? "Internet checks resumed" : "Internet checks paused")
         onStatusChange?()
@@ -526,8 +561,7 @@ final class MonitorModel: ObservableObject {
         stopSpeedTest()
         sample(); isSleeping = true; sleepStart = nowProvider()
         persistence.event(at: nowProvider(), kind: "sleep", detail: "Mac sleeping. Counter sampling and probes paused.")
-        sampler?.invalidate(); probeTimer?.invalidate(); probeGeneration += 1; probeTask?.cancel(); probeTask = nil; probing = false
-        checkInProgress = false; checkPending = false
+        sampler?.invalidate(); cancelProbe()
         machine.reset(to: .sleeping); health = .sleeping; rateAvailable = false; down = 0; up = 0
         invalidateConnectionInterval()
         flush(); onStatusChange?()
@@ -535,12 +569,13 @@ final class MonitorModel: ObservableObject {
     func didWake() {
         let now = nowProvider()
         if let start = sleepStart { append(Observation(start: start, end: now, coverage: .sleep)) }
-        sleepStart = nil; isSleeping = false; lastAccounted = now
-        if let counters = try? counterProvider() { engine.rebaseline(counters, at: now, uptime: uptimeProvider()) }
+        let uptime = uptimeProvider()
+        sleepStart = nil; isSleeping = false; lastAccounted = now; lastAccountedUptime = uptime
+        if let counters = try? counterProvider() { engine.rebaseline(counters, at: now, uptime: uptime) }
         else { engine = CounterEngine() }
         detailEngine = InterfaceRateEngine(); lastRates = []; rebuildConnectionDetails()
-        probeGeneration += 1; probeTask?.cancel(); probeTask = nil; probing = false
-        machine.reset(to: probesEnabled ? .checking : .disabled); health = machine.state; lastChecked = nil; healthSince = now
+        cancelProbe()
+        machine.reset(to: probesEnabled ? .checking : .disabled); health = machine.state; lastChecked = nil
         invalidateConnectionInterval()
         persistence.event(at: now, kind: "wake", detail: "Mac awake. Counters rebaselined; internet health checked again.")
         scheduleSampler(); scheduleProbe(after: 5); flush(); onStatusChange?()
@@ -574,11 +609,20 @@ final class MonitorModel: ObservableObject {
     }
     func loadHistory(days: Int = 30) async {
         historyDays = days
+        historyGeneration += 1
+        let generation = historyGeneration
         guard let store else { return }
+        // Stored daily rows use UTC midnights. Include today in the selected number of dates.
+        let nextDay = Date(timeIntervalSince1970: (floor(nowProvider().timeIntervalSince1970 / 86400) + 1) * 86400)
+        let since = days == 0 ? Date.distantPast : nextDay.addingTimeInterval(-Double(days) * 86400)
         do {
-            historyRows = try await store.rows(grain: 86400, since: days == 0 ? .distantPast : nowProvider().addingTimeInterval(-Double(days) * 86400), limit: days == 0 ? 40000 : days + 1)
-            recentEvents = try await store.events(limit: 100)
-        } catch { errorMessage = "Cannot read history: \(error)" }
+            let rows = try await store.rows(grain: 86400, since: since, before: days == 0 ? .distantFuture : nextDay, limit: days == 0 ? 40000 : days)
+            let events = try await store.events(limit: 100)
+            guard generation == historyGeneration else { return }
+            historyRows = rows; recentEvents = events
+        } catch {
+            if generation == historyGeneration { errorMessage = "Cannot read history: \(error)" }
+        }
     }
     func selectPeriod(_ selection: HistoryPeriod) {
         guard selection != period else { return }
@@ -634,17 +678,19 @@ final class MonitorModel: ObservableObject {
         stopSpeedTest()
         // History never opened, so nothing can be saved. Refusing would make Current impossible to quit.
         guard store != nil else { pathMonitor.cancel(); completion(true); return }
-        sample(); terminationRequested = true; sampler?.invalidate(); probeTimer?.invalidate()
-        probeGeneration += 1; probeTask?.cancel(); probeTask = nil
-        probing = false; checkInProgress = false; checkPending = false
+        sample(); observationsDuringQuit = []; sampler?.invalidate(); cancelProbe()
         onStatusChange?()
         persistence.event(at: nowProvider(), kind: "quit", detail: "App quit. Future time is unobserved until the next launch.")
         flush { [weak self] saved in
             guard let self else { completion(false); return }
-            if saved { self.pathMonitor.cancel() }
-            else {
+            if saved {
+                self.observationsDuringQuit = []
+                self.pathMonitor.cancel()
+            } else {
                 self.persistence.removePendingEvents(kind: "quit")
-                self.terminationRequested = false
+                let resumed = self.observationsDuringQuit ?? []
+                self.observationsDuringQuit = nil
+                for observation in resumed { self.append(observation) }
                 self.errorMessage = "Current is still running because history could not be saved. Retry quitting after resolving the storage error."
                 self.scheduleSampler(); self.scheduleProbe(after: 0)
             }

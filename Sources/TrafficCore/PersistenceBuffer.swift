@@ -9,7 +9,7 @@ public protocol HistoryRepository: Sendable {
     func today(at date: Date, calendar: Calendar) async throws -> HistorySummary
     func aggregate(from start: Date?, to end: Date) async throws -> PeriodHistory
     func chart(from start: Date?, to end: Date, limit: Int) async throws -> PeriodChart
-    func rows(grain: Int, since: Date, limit: Int) async throws -> [HistoryRow]
+    func rows(grain: Int, since: Date, before: Date, limit: Int) async throws -> [HistoryRow]
     func events(limit: Int) async throws -> [HistoryEvent]
     func backup(to destination: URL) async throws
     func exportCSV(to destination: URL) async throws

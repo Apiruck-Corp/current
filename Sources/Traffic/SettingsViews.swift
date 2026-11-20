@@ -133,9 +133,12 @@ struct SettingsPane: View {
         }
     }
     // Outside the app bundle (tests, `swift run`) the main bundle belongs to another program.
-    private var version: String {
-        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Current" else { return "0.1.3" }
-        return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.3"
+    static var version: String {
+        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Current",
+              let release = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else {
+            return "0.1.4"
+        }
+        return release
     }
     @ViewBuilder private var about: some View {
         Section {
@@ -143,7 +146,7 @@ struct SettingsPane: View {
                 Image(nsImage: NSApplication.shared.applicationIconImage).resizable().interpolation(.high)
                     .frame(width: 84, height: 84).accessibilityHidden(true)
                 Text("Current").font(.system(size: 22, weight: .semibold))
-                Text("Version \(version)").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("Version \(Self.version)").font(.system(size: 12)).foregroundStyle(.secondary)
                 Text("Live traffic, internet health and speed, right in your menu bar.")
                     .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }.frame(maxWidth: .infinity).padding(.vertical, 12)

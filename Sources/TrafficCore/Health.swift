@@ -20,40 +20,52 @@ public struct HealthTransition: Sendable {
     public var date: Date
     public var outageStart: Date?
     public var newOutage: Bool
+    public var outageDuration: TimeInterval?
 }
 public struct HealthMachine: Sendable {
     public private(set) var state: ConnectionHealth = .checking
     public private(set) var lastChecked: Date?
     public private(set) var outageStart: Date?
-    private var firstFailure: Date?
-    private var failures = 0
+    private var firstFailure: TimeInterval?
+    private var outageUptime: TimeInterval?
     public init() {}
     public mutating func reset(to state: ConnectionHealth = .checking) {
-        self.state = state; failures = 0; firstFailure = nil; outageStart = nil; lastChecked = nil
+        self = HealthMachine()
+        self.state = state
     }
-    public mutating func receive(_ result: ProbeOutcome, at date: Date) -> HealthTransition? {
+    public mutating func recheckPath() {
+        // Start confirmation afresh on this path. An existing outage still needs a recovery event.
+        state = .checking
+        firstFailure = nil
+        lastChecked = nil
+    }
+    public mutating func receive(_ result: ProbeOutcome, at date: Date, uptime: TimeInterval) -> HealthTransition? {
         let old = state
         let previousOutage = outageStart
+        let outageDuration = outageUptime.map { max(0, uptime - $0) }
         lastChecked = date
         switch result {
         case .success:
-            failures = 0; firstFailure = nil; state = .online; outageStart = nil
+            firstFailure = nil; state = .online; outageStart = nil; outageUptime = nil
         case .unexpected:
-            failures = 0; firstFailure = nil
+            firstFailure = nil
             // A portal or unexpected page is uncertain even after a confirmed failure.
             // Preserve the event start so a later valid response can log recovery.
             state = .uncertain
         case .failed:
-            // A backward clock change restarts the confirmation window instead of stalling it.
-            if firstFailure.map({ date < $0 }) ?? true { firstFailure = date }
-            failures += 1
-            if failures >= 2, date.timeIntervalSince(firstFailure!) >= 5 {
+            let first = min(firstFailure ?? uptime, uptime)
+            firstFailure = first
+            if uptime - first >= 5 {
                 state = .offline
-                if outageStart == nil { outageStart = date }
+                if outageStart == nil { outageStart = date; outageUptime = uptime }
             } else if state != .offline { state = .uncertain }
         }
         guard old != state else { return nil }
-        return HealthTransition(from: old, to: state, date: date, outageStart: previousOutage ?? outageStart, newOutage: previousOutage == nil && state == .offline)
+        return HealthTransition(from: old, to: state, date: date, outageStart: previousOutage ?? outageStart,
+            newOutage: previousOutage == nil && state == .offline, outageDuration: outageDuration)
+    }
+    public mutating func receive(_ result: ProbeOutcome, at date: Date) -> HealthTransition? {
+        receive(result, at: date, uptime: date.timeIntervalSinceReferenceDate)
     }
 }
 
