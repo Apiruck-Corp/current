@@ -66,12 +66,19 @@ private actor FaultyRepository: HistoryRepository {
     var failReads = false, failWrites = false
     var delayAggregate = false
     var nextRowsGates: (entered: TestGate, release: TestGate)?
+    var nextWriteGates: (entered: TestGate, release: TestGate)?
     init(_ store: HistoryStore) { underlying = store }
     func inject(reads: Bool = false, writes: Bool = false) { failReads = reads; failWrites = writes }
     func delayNextAggregate() { delayAggregate = true }
     func holdNextRows(entered: TestGate, release: TestGate) { nextRowsGates = (entered, release) }
+    func holdNextWrite(entered: TestGate, release: TestGate) { nextWriteGates = (entered, release) }
     func lastRecorded() async throws -> Date? { try await underlying.lastRecorded() }
     func record(_ observations: [Observation], now: Date, events: [RecordedEvent], connectivity: ConnectivityUpdate) async throws {
+        if let gates = nextWriteGates {
+            nextWriteGates = nil
+            await gates.entered.open()
+            await gates.release.wait()
+        }
         if failWrites { throw HistoryError("mock disk failure") }
         try await underlying.record(observations, now: now, events: events, connectivity: connectivity)
     }
@@ -153,6 +160,30 @@ private actor FaultyRepository: HistoryRepository {
         let events = try await store.events()
         XCTAssertEqual(events.filter { $0.kind == "recovery" }.count, 1)
         XCTAssertEqual(model.today.offline, 8)
+    }
+
+    func testRepeatedPathReportPreservesFailureConfirmation() async {
+        let inputs = TestInputs(), model = model(inputs, probe: ProbeSequence([.failed, .failed]))
+        await model.start().value
+        await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")?.value
+        inputs.advance(2)
+        XCTAssertNil(model.updatePath(satisfied: true, changed: false, isMetered: false, interface: "en0"))
+        inputs.advance(4)
+        await model.checkConnectivity()?.value
+        XCTAssertEqual(model.health, .offline)
+        let saved = await model.flushAndWait()
+        XCTAssertTrue(saved)
+    }
+
+    func testReturningToUnmeteredDismissesConfirmationWithoutStartingATest() {
+        preferences.set(true, forKey: "probesDisabled")
+        let model = MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), automatic: false,
+            preferences: preferences, speedTest: { throw HistoryError("Synthetic speed test") })
+        model.updatePath(satisfied: true, changed: true, isMetered: true, interface: "en0")
+        model.requestSpeedTest()
+        XCTAssertEqual(model.speedTestPhase, .confirmMetered)
+        model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en1")
+        XCTAssertEqual(model.speedTestPhase, .idle)
     }
 
     func testMeteredPathWithoutInterfaceNameStillRequiresConfirmation() {
@@ -293,6 +324,62 @@ private actor FaultyRepository: HistoryRepository {
         await release.open()
         await previous.value
         XCTAssertEqual(model.historyRows.count, 1)
+    }
+
+    func testClosingHistoryDiscardsAPendingRead() async throws {
+        let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("history.sqlite"))
+        try await store.record([Observation(start: inputs.now().addingTimeInterval(-1), end: inputs.now(), received: 42)],
+            now: inputs.now(), events: [(inputs.now(), "sample", "Fixture")])
+        let repository = FaultyRepository(store), model = model(inputs, repository: repository)
+        model.historyOpen = true
+        let entered = TestGate(), release = TestGate()
+        await repository.holdNextRows(entered: entered, release: release)
+        let load = Task { await model.loadHistory(days: 7) }
+        await entered.wait()
+        model.historyOpen = false
+        await release.open()
+        await load.value
+        XCTAssertTrue(model.historyRows.isEmpty)
+        XCTAssertTrue(model.recentEvents.isEmpty)
+    }
+
+    func testPathSwitchDuringFinalWritePreservesTheQuitCutoffOrResumesAccounting() async throws {
+        for veto in [false, true] {
+            let inputs = TestInputs(), store = try HistoryStore(url: directory.appendingPathComponent("quit-\(veto).sqlite"))
+            let repository = FaultyRepository(store)
+            let model = model(inputs, repository: repository, probe: ProbeSequence([.failed, .failed]))
+            await model.start().value
+            await model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en0")?.value
+            inputs.advance(8)
+            await model.checkConnectivity()?.value
+            let saved = await model.flushAndWait()
+            XCTAssertTrue(saved)
+            let entered = TestGate(), release = TestGate()
+            await repository.holdNextWrite(entered: entered, release: release)
+            let quit = Task { await withCheckedContinuation { continuation in
+                model.prepareToQuit { continuation.resume(returning: $0) }
+            } }
+            await entered.wait()
+            inputs.advance(4, received: 400)
+            model.updatePath(satisfied: true, changed: true, isMetered: false, interface: "en1")
+            inputs.advance(3, received: 150)
+            await repository.inject(writes: veto)
+            await release.open()
+            let allowed = await quit.value
+            XCTAssertEqual(allowed, !veto)
+            if veto {
+                await repository.inject()
+                model.sample()
+                let retried = await model.flushAndWait()
+                XCTAssertTrue(retried)
+            }
+            let summary = try await store.aggregate(from: nil, to: inputs.now()).summary
+            XCTAssertEqual(summary.offline, veto ? 4 : 0)
+            XCTAssertEqual(summary.uncertain, veto ? 11 : 8)
+            XCTAssertEqual(summary.received, veto ? 550 : 0)
+            let events = try await store.events()
+            XCTAssertEqual(events.filter { $0.kind == "quit" }.count, veto ? 0 : 1)
+        }
     }
 
     func testFirstOpenQueuesTunnelIdentityBehindStartupInventory() async throws {
