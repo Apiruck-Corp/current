@@ -20,9 +20,9 @@ import XCTest
     }
 
     func testCheckFindsNewReleaseAndRemembersItBetweenLaunches() async throws {
-        let suite = "org.traffic.updates.\(UUID())"
+        let suite = ScratchDefaults.makeSuiteName("updates")
         let prefs = UserDefaults(suiteName: suite)!
-        defer { prefs.removePersistentDomain(forName: suite) }
+        defer { ScratchDefaults.remove(suite) }
         let checker = ReleaseChecker(installed: "0.1.3", preferences: prefs) { "0.1.5" }
         checker.scheduleAutomaticChecks()
         XCTAssertFalse(checker.automatic)

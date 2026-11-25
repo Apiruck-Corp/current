@@ -45,8 +45,8 @@ import TrafficCore
     }
     func testNativePinButtonPreservesPanelAcrossOutsideClickAndDeactivation() throws {
         let (window, anchor) = try fixture(); defer { window.close() }
-        let name = "org.traffic.pin-test.\(UUID())", preferences = UserDefaults(suiteName: name)!
-        defer { preferences.removePersistentDomain(forName: name) }
+        let name = ScratchDefaults.makeSuiteName("pin-test"), preferences = UserDefaults(suiteName: name)!
+        defer { ScratchDefaults.remove(name) }
         let model = MonitorModel(automatic: false, preferences: preferences)
         let now = Date()
         model.down = 842_000; model.up = 125_000; model.rateAvailable = true
@@ -245,10 +245,12 @@ import TrafficCore
         defer { window.close() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("traffic-native-ranges-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = ScratchDefaults.makeSuiteName("native-ranges")
+        defer { ScratchDefaults.remove(suite) }
         let store = try HistoryStore(url: directory.appendingPathComponent("traffic.sqlite")), now = Date()
         try await store.record([Observation(start: now.addingTimeInterval(-1800), end: now.addingTimeInterval(-1740), received: 100, peakDown: 102_000_000)], now: now)
         let model = MonitorModel(dataURL: directory.appendingPathComponent("traffic.sqlite"), repository: store,
-            automatic: false, preferences: UserDefaults(suiteName: "org.traffic.native-ranges.\(UUID())")!, counters: { [] }, now: { now })
+            automatic: false, preferences: UserDefaults(suiteName: suite)!, counters: { [] }, now: { now })
         await model.start().value; await model.loadPeriod()
         model.rateAvailable = true; model.down = 10; model.up = 10
         model.connectionDetails = [ConnectionDetail(kind: .wifi, interfaces: ["en0"], down: 0, up: 0)]

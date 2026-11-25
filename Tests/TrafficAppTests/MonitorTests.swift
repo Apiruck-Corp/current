@@ -112,11 +112,16 @@ private actor FaultyRepository: HistoryRepository {
 @MainActor final class MonitorTests: XCTestCase {
     private var directory: URL!
     private var preferences: UserDefaults!
+    private var preferencesSuite: String!
     override func setUp() async throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("Traffic-app-test-\(UUID().uuidString)")
-        preferences = UserDefaults(suiteName: "org.traffic.test.\(UUID().uuidString)")!
+        preferencesSuite = ScratchDefaults.makeSuiteName("test")
+        preferences = UserDefaults(suiteName: preferencesSuite)!
     }
-    override func tearDown() async throws { try? FileManager.default.removeItem(at: directory) }
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: directory)
+        ScratchDefaults.remove(preferencesSuite)
+    }
     private func model(_ inputs: TestInputs, repository: (any HistoryRepository)? = nil, probe: ProbeSequence = ProbeSequence([])) -> MonitorModel {
         MonitorModel(dataURL: directory.appendingPathComponent("history.sqlite"), repository: repository, automatic: false, preferences: preferences,
                      counters: { try inputs.counters() }, uptime: { inputs.clock() }, now: { inputs.now() }, probe: { await probe.next() }, inventory: { _ in ConnectionInventory(physicalKinds: ["en0": .wifi]) })
