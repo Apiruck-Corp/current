@@ -5,9 +5,9 @@ import SwiftUI
 
 @MainActor final class AppearanceTests: XCTestCase {
     func testLocalChoicesPersistIndependentlyAndInvalidValuesFallBack() {
-        let name = "org.traffic.appearance-test.\(UUID())"
+        let name = ScratchDefaults.makeSuiteName("appearance-test")
         let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        defer { ScratchDefaults.remove(name) }
         let model = MonitorModel(automatic: false, preferences: defaults)
         XCTAssertEqual(model.appearance, .defaults)
         let chosen = TrafficAppearanceSettings(mode: .dark, lightTheme: .forest, darkTheme: .ember)
@@ -54,8 +54,8 @@ import SwiftUI
         XCTAssertNotEqual(StatusFace.ink(TrafficPalette.download, appearance: .aqua), StatusFace.ink(TrafficPalette.download, appearance: .darkAqua))
     }
     func testRetiredIrisMigratesToGraphiteWithoutChangingOtherChoices() {
-        let name = "org.traffic.theme-migration.\(UUID())", preferences = UserDefaults(suiteName: name)!
-        defer { preferences.removePersistentDomain(forName: name) }
+        let name = ScratchDefaults.makeSuiteName("theme-migration"), preferences = UserDefaults(suiteName: name)!
+        defer { ScratchDefaults.remove(name) }
         preferences.set("iris", forKey: "appearance.lightTheme")
         preferences.set("ember", forKey: "appearance.darkTheme")
         preferences.set("dark", forKey: "appearance.mode")
@@ -70,9 +70,9 @@ import SwiftUI
         _ = NSApplication.shared
         let previous = TrafficPalette.settings
         defer { TrafficPalette.apply(previous) }
-        let name = "org.traffic.canvas-test.\(UUID())"
+        let name = ScratchDefaults.makeSuiteName("canvas-test")
         let preferences = UserDefaults(suiteName: name)!
-        defer { preferences.removePersistentDomain(forName: name) }
+        defer { ScratchDefaults.remove(name) }
         let model = MonitorModel(automatic: false, preferences: preferences)
         for theme in TrafficColorTheme.allCases {
             TrafficPalette.apply(.init(lightTheme: theme, darkTheme: theme))

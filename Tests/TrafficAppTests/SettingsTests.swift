@@ -74,8 +74,8 @@ import SwiftUI
     }
     func testNativeWindowReusesStableFrameAcrossTabsAndReleasesOnClose() throws {
         try native()
-        let name = "org.traffic.settings-native.\(UUID())"
-        defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+        let name = ScratchDefaults.makeSuiteName("settings-native")
+        defer { ScratchDefaults.remove(name) }
         let model = model(name), controller = SettingsWindowController(model: model, showHistory: {}, frameAutosaveName: nil)
         defer { controller.window?.close() }
         for _ in 0..<3 {
@@ -112,8 +112,8 @@ import SwiftUI
     }
     func testNativePalettePressesAndModeChangesPersistAndKeepWindowOpen() throws {
         try native()
-        let name = "org.traffic.settings-controls.\(UUID())"
-        defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+        let name = ScratchDefaults.makeSuiteName("settings-controls")
+        defer { ScratchDefaults.remove(name) }
         let model = model(name), controller = SettingsWindowController(model: model, showHistory: {}, frameAutosaveName: nil)
         let previous = NSApp.appearance, previousPalette = TrafficPalette.settings
         defer { model.onAppearanceChange = nil; controller.window?.close(); NSApp.appearance = previous; TrafficPalette.apply(previousPalette) }
@@ -167,8 +167,8 @@ import SwiftUI
     }
     func testNativeSettingsRetainsSavedSizeAcrossCloseAndNewController() throws {
         try native()
-        let name = "org.traffic.settings-frame.\(UUID())", frameName = "TrafficSettingsTest-\(UUID())"
-        defer { UserDefaults(suiteName: name)?.removePersistentDomain(forName: name); NSWindow.removeFrame(usingName: frameName) }
+        let name = ScratchDefaults.makeSuiteName("settings-frame"), frameName = "TrafficSettingsTest-\(UUID())"
+        defer { ScratchDefaults.remove(name); NSWindow.removeFrame(usingName: frameName) }
         let model = model(name), first = SettingsWindowController(model: model, showHistory: {}, frameAutosaveName: frameName)
         first.show(); pump(); pump()
         let window = try XCTUnwrap(first.window)
@@ -184,8 +184,8 @@ import SwiftUI
     }
     func testCommandCommaEscapeAndPopoverDismissalPreserveOtherWindowsAndModal() throws {
         try native()
-        let name = "org.traffic.settings-events.\(UUID())"
-        defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+        let name = ScratchDefaults.makeSuiteName("settings-events")
+        defer { ScratchDefaults.remove(name) }
         let controller = SettingsWindowController(model: model(name), showHistory: {}, frameAutosaveName: nil)
         defer { controller.window?.close() }
         let target = SettingsMenuTarget(); target.onSettings = { controller.show() }
@@ -227,8 +227,8 @@ import SwiftUI
     }
     func testGeneralCheckControlPersistsWithoutEnablingNotifications() throws {
         try native()
-        let name = "org.traffic.settings-general.\(UUID())"
-        defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+        let name = ScratchDefaults.makeSuiteName("settings-general")
+        defer { ScratchDefaults.remove(name) }
         let model = model(name), controller = SettingsWindowController(model: model, showHistory: {}, frameAutosaveName: nil)
         defer { controller.window?.close() }
         controller.show(tab: .general); pump(); pump()
@@ -247,10 +247,10 @@ import SwiftUI
         try native()
         guard let path = ProcessInfo.processInfo.environment["TRAFFIC_SETTINGS_NATIVE_PREVIEW_DIR"] else { throw XCTSkip("Set TRAFFIC_SETTINGS_NATIVE_PREVIEW_DIR for own-window renders.") }
         let directory = URL(fileURLWithPath: path); try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let name = "org.traffic.settings-window-preview.\(UUID())", model = model(name)
+        let name = ScratchDefaults.makeSuiteName("settings-window-preview"), model = model(name)
         let previous = NSApp.appearance, previousPalette = TrafficPalette.settings
         let controller = SettingsWindowController(model: model, showHistory: {}, frameAutosaveName: nil)
-        defer { controller.window?.close(); NSApp.appearance = previous; TrafficPalette.apply(previousPalette); UserDefaults.standard.removePersistentDomain(forName: name) }
+        defer { controller.window?.close(); NSApp.appearance = previous; TrafficPalette.apply(previousPalette); ScratchDefaults.remove(name) }
         for dark in [false, true] {
             model.setAppearance(.init(mode: dark ? .dark : .light)); NSApp.appearance = model.appearance.mode.nsAppearance
             TrafficPalette.apply(model.appearance)
